@@ -1,15 +1,20 @@
 {
-  "name": "squire-bot",
+  "name": "squire",
   "version": "2.0.0",
-  "description": "Modular Discord bot (Squire) with feature loader",
+  "description": "Discord bot for The Unbreakable Crown",
   "type": "module",
   "main": "src/index.js",
   "scripts": {
     "start": "node src/index.js",
     "deploy:commands": "node src/core/commands-deploy.js",
+    "cmds:list": "node src/core/commands-list.js",
+    "cmds:wipe:global": "node src/core/commands-wipe.js --global",
+    "cmds:wipe:guild": "node src/core/commands-wipe.js --guild",
     "test": "echo \"(add Jest later)\""
   },
-  "license": "MIT",
+  "engines": {
+    "node": ">=18.17"
+  },
   "dependencies": {
     "discord.js": "^14.24.0",
     "lokijs": "^1.5.12"
