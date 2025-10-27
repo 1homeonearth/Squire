@@ -1,0 +1,17 @@
+{
+  "name": "squire-bot",
+  "version": "2.0.0",
+  "description": "Modular Discord bot (Squire) with feature loader",
+  "type": "module",
+  "main": "src/index.js",
+  "scripts": {
+    "start": "node src/index.js",
+    "deploy:commands": "node src/core/commands-deploy.js",
+    "test": "echo \"(add Jest later)\""
+  },
+  "license": "MIT",
+  "dependencies": {
+    "discord.js": "^14.24.0",
+    "lokijs": "^1.5.12"
+  }
+}

@@ -1,0 +1,42 @@
+{
+  "token": "MTQzMTk1NjU2MjI0Njc2MjU3Nw.Gq-js5.FVytIyxG5VqKp3R9Xs-S37rBuD9F7VT1gR8epk",
+  "applicationId": "1431956562246762577",
+  "dbPath": "./squire.db.json",
+  "sampleRate": 1.0,
+  "forwardBots": true,
+  "debugLevel": "info",
+  "loggingServerId": "1431923234567360542",
+  "mapping": {
+    "1129906023084343346": "https://discord.com/api/webhooks/1432010150083821719/BeGQRrtmbLsxbYTcUTsZA6U2eDeOI9MdspmMCXBQx9mUXNnqfy3_W1jJZixZymUvxy9e",
+    "1391983429553492049": "https://discord.com/api/webhooks/1432024878315474985/5UaZu5m4xSgX1wiLakmToV7RAl-yvUf1J-1S9kyFFxqGrFvBkww23whoAOqyJ0KbVykb",
+    "1421907917459951696": "https://discord.com/api/webhooks/1432043571741196480/OQlZeVmRSpUHfixMQEGv2Ht3j15z1AgKNgB5wVmDGVRnjrG_SeVgN9nro9ZkB03E6dWm",
+    "1413887559695597740": "https://discord.com/api/webhooks/1432043841216577629/_Y564DncWvqEKZ3z1dEcY29sorlrrtmUQ2TrWMWSh211Vq0R5mlzwWHYun1l1dELlGlr"
+  },
+  "excludeChannels": {
+    "1129906023084343346": [
+      "123456789012345678",
+      "234567890123456789"
+    ]
+  },
+  "excludeCategories": {
+    "1129906023084343346": [
+      "1148738833643470949",
+      "1129908986133631097",
+      "1393328897881411684"
+    ],
+    "1391983429553492049": [
+      "1391985969904881704",
+      "1391984629606776872",
+      "1391985340780253185"
+    ],
+    "1421907917459951696": [
+      "1421909029755817996",
+      "1421909022251942048",
+      "1421909023434735720"
+    ],
+    "1413887559695597740": [
+      "1413888221246652556"
+    ]
+  }
+}
+
