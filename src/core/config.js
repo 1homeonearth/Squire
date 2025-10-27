@@ -11,29 +11,24 @@ function safeJSON(str, fallback) {
 }
 
 export function loadConfig() {
-    // 1) Load file config for local dev
     const fileCfg = fs.existsSync(CONFIG_PATH)
     ? JSON.parse(fs.readFileSync(CONFIG_PATH, 'utf8'))
     : {};
 
-    // 2) Overlay env-provided JSON (Actions)
-    const envCfg = {
-        mapping: process.env.MAPPING_JSON
-        ? safeJSON(process.env.MAPPING_JSON, fileCfg.mapping)
-        : fileCfg.mapping,
-        excludeChannels: process.env.EXCLUDE_CHANNELS_JSON
-        ? safeJSON(process.env.EXCLUDE_CHANNELS_JSON, fileCfg.excludeChannels)
-        : fileCfg.excludeChannels,
-        excludeCategories: process.env.EXCLUDE_CATEGORIES_JSON
-        ? safeJSON(process.env.EXCLUDE_CATEGORIES_JSON, fileCfg.excludeCategories)
-        : fileCfg.excludeCategories,
-    };
+    // Overlay env for CI
+    const over = { ...fileCfg };
 
-    // Merge onto the file config so everything else (token, etc.) still works locally
-    return { ...fileCfg, ...envCfg };
+    if (process.env.DISCORD_TOKEN)        over.token = process.env.DISCORD_TOKEN;
+    if (process.env.APPLICATION_ID)       over.applicationId = process.env.APPLICATION_ID;
+    if (process.env.LOGGING_SERVER_ID)    over.loggingServerId = process.env.LOGGING_SERVER_ID;
+
+    if (process.env.MAPPING_JSON)         over.mapping = safeJSON(process.env.MAPPING_JSON, fileCfg.mapping);
+    if (process.env.EXCLUDE_CHANNELS_JSON)over.excludeChannels = safeJSON(process.env.EXCLUDE_CHANNELS_JSON, fileCfg.excludeChannels);
+    if (process.env.EXCLUDE_CATEGORIES_JSON) over.excludeCategories = safeJSON(process.env.EXCLUDE_CATEGORIES_JSON, fileCfg.excludeCategories);
+
+    return over;
 }
 
 export function writeConfig(next) {
-    // Only writes the file; CI uses env and won't call this.
     fs.writeFileSync(CONFIG_PATH, JSON.stringify(next, null, 2));
 }
