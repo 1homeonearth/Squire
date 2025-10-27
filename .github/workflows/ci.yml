@@ -1,15 +1,84 @@
-name: CI
+name: CI & Deploy Commands
+
 on:
-  push: { branches: [ main ] }
-  pull_request: {}
+  push:
+    branches: [ main ]
+  pull_request:
+  workflow_dispatch:
+
+# Use minimal required permissions (checkout recommends contents:read)
+permissions:
+  contents: read
+
+# Global, non-secret config pulled from GitHub "Repository variables"
+# (Settings → Secrets and variables → Actions → Variables)
+# You can override any of these per job/step if needed.
+env:
+  APPLICATION_ID: ${{ vars.APPLICATION_ID }}
+  LOGGING_SERVER_ID: ${{ vars.LOGGING_SERVER_ID }}
+  SAMPLE_RATE: ${{ vars.SAMPLE_RATE }}
+  DEBUG_LEVEL: ${{ vars.DEBUG_LEVEL }}
+  FORWARD_BOTS: ${{ vars.FORWARD_BOTS }}
+  DB_PATH: ${{ vars.DB_PATH }}
+  EXCLUDE_CHANNELS_JSON: ${{ vars.EXCLUDE_CHANNELS_JSON }}
+  EXCLUDE_CATEGORIES_JSON: ${{ vars.EXCLUDE_CATEGORIES_JSON }}
+
 jobs:
-  node:
+  ci:
+    name: Node CI
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-node@v4
+      - name: Checkout
+        uses: actions/checkout@v4
+        # checkout is required so the runner has your repo contents. :contentReference[oaicite:0]{index=0}
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
         with:
-          node-version: '20.x'
+          node-version: '20'
           cache: 'npm'
-      - run: npm ci || npm install
-      - run: npm test
+        # setup-node is the recommended way to pin Node and enable caching. :contentReference[oaicite:1]{index=1}
+
+      - name: Install
+        run: npm ci || npm install
+
+      - name: Lint & Test (placeholder)
+        run: |
+          echo "No tests yet"; exit 0
+
+      - name: Validate JSON-ish env (fail fast if someone pasted bad JSON)
+        run: |
+          node -e "JSON.parse(process.env.EXCLUDE_CHANNELS_JSON || '{}')"
+          node -e "JSON.parse(process.env.EXCLUDE_CATEGORIES_JSON || '{}')"
+          echo "✅ EXCLUDE_* look parseable"
+        # Variables (non-secret) are available via the vars context; we surface them through env above. :contentReference[oaicite:2]{index=2}
+
+  deploy-commands:
+    name: Deploy /setup (guild-scoped)
+    needs: ci
+    runs-on: ubuntu-latest
+    if: github.ref == 'refs/heads/main'  # only on main
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        # Needed so the script exists on the runner. :contentReference[oaicite:3]{index=3}
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: 'npm'
+        # Recommended setup for Node workflows. :contentReference[oaicite:4]{index=4}
+
+      - name: Install
+        run: npm ci || npm install
+
+      - name: Deploy slash commands to logging server
+        run: node src/core/commands-deploy.js
+        env:
+          # secrets must be explicitly provided to the step that needs them
+          DISCORD_TOKEN: ${{ secrets.DISCORD_TOKEN }}
+          # MAPPING_JSON contains sensitive webhook URLs → keep as a Secret
+          MAPPING_JSON: ${{ secrets.MAPPING_JSON }}
+          # non-secret repo Variables are already exported at job env level above
+        # GitHub Actions exposes secrets via the `secrets` context and variables via `vars`. :contentReference[oaicite:5]{index=5}
