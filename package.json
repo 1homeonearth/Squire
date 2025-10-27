@@ -10,7 +10,7 @@
     "cmds:list": "node src/core/commands-list.js",
     "cmds:wipe:global": "node src/core/commands-wipe.js --global",
     "cmds:wipe:guild": "node src/core/commands-wipe.js --guild",
-    "test": "echo \"(add Jest later)\""
+    "test": "node --test"
   },
   "engines": {
     "node": ">=18.17"

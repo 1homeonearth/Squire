@@ -63,7 +63,7 @@ async function wipeAllGuilds() {
     console.log('Logging in to enumerate guilds…');
     const client = new Client({ intents: [GatewayIntentBits.Guilds] });
     await client.login(TOKEN);
-    await new Promise(res => client.once('clientReady', res));
+    await new Promise(res => client.once('ready', res));
 
     const guilds = await client.guilds.fetch(); // partials
     console.log(`Found ${guilds.size} guild(s). Wiping guild-scoped commands…`);

@@ -62,7 +62,7 @@ class WelcomeCard extends Builder {
     }
 }
 
-async function buildWelcomeImage(member) {
+async function buildWelcomeImage(member, logger) {
     // Ensure we have the freshest user data (banners often require an explicit fetch)
     try { await member.user.fetch(true); } catch {}
 
@@ -72,7 +72,14 @@ async function buildWelcomeImage(member) {
     member.displayBannerURL?.({ size: 2048, extension: 'png', dynamic: true }) ||
     null;
 
-    const avatarImg = await loadImage(avatarURL);
+    let avatarImg = null;
+    try {
+        avatarImg = await loadImage(avatarURL);
+    } catch (err) {
+        logger?.warn?.(`[welcome] failed to load avatar for ${member.user?.tag ?? member.id}: ${err?.message ?? err}`);
+        return null;
+    }
+
     const bannerImg = bannerURL ? await loadImage(bannerURL).catch(() => null) : null;
 
     const card = new WelcomeCard()
@@ -85,9 +92,10 @@ async function buildWelcomeImage(member) {
     return new AttachmentBuilder(buffer, { name: 'welcome.png' });
 }
 
-export function init(client) {
+export function init({ client, logger }) {
     client.on('guildMemberAdd', async (member) => {
         try {
+            if (!member.guild) return;
             const ch = findWelcomeChannel(member.guild);
             if (!ch) return;
 
@@ -97,21 +105,28 @@ export function init(client) {
             const verify = mentionOrHash(member.guild, 'verify');
             await ch.send(`Please read our ${rules}, select your ${roles}, and then ${verify} to unlock the full server.`);
 
-            const image = await buildWelcomeImage(member);
-            await ch.send({ files: [image] });
+            const image = await buildWelcomeImage(member, logger);
+            if (image) {
+                await ch.send({ files: [image] });
+            }
         } catch (e) {
-            console.error(`[welcome] failed to send welcome in ${member.guild?.name}:`, e?.message || e);
+            const name = member.guild?.name ?? member.guild?.id ?? 'unknown guild';
+            const msg = e?.message || e;
+            logger?.error?.(`[welcome] failed to send welcome in ${name}: ${msg}`);
         }
     });
 
     client.on('guildMemberRemove', async (member) => {
         try {
+            if (!member.guild) return;
             const ch = findWelcomeChannel(member.guild);
             if (!ch) return;
             const name = member.displayName || member.user?.username || 'A member';
             await ch.send(`👋 ${name} left the server.`);
         } catch (e) {
-            console.error(`[welcome] failed to send goodbye in ${member.guild?.name}:`, e?.message || e);
+            const guildName = member.guild?.name ?? member.guild?.id ?? 'unknown guild';
+            const msg = e?.message || e;
+            logger?.error?.(`[welcome] failed to send goodbye in ${guildName}: ${msg}`);
         }
     });
 }
