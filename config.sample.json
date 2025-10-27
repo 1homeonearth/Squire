@@ -6,7 +6,10 @@
   "forwardBots": true,
   "debugLevel": "info",
   "loggingServerId": "1431923234567360542",
-  "mapping": "MAPPING_JSON",
+  "mapping": {
+    "1129906023084343346": "https://discord.com/api/webhooks/xxx/yyy",
+    "1391983429553492049": "https://discord.com/api/webhooks/aaa/bbb"
+  },
   "excludeChannels": {
     "1129906023084343346": [
       "123456789012345678",
@@ -32,6 +35,13 @@
     "1413887559695597740": [
       "1413888221246652556"
     ]
+  },
+  "autoban": {
+    "enabled": true,
+    "blockedUsernames": ["mega", "megas", "link", "links"],
+    "verifiedRoleIds": ["123456789012345678"],
+    "notifyChannelId": "987654321098765432",
+    "deleteMessageSeconds": 0
   }
 }
 

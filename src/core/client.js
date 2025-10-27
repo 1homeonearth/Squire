@@ -27,7 +27,7 @@ export async function createClient({ token, logger }) {
     });
 
     let readyOnce = false;
-    client.once('clientReady', () => {
+    client.once('ready', () => {
         if (readyOnce) return;
         readyOnce = true;
         logger.info(`Logged in as ${client.user?.tag ?? 'unknown'}`);
