@@ -13,9 +13,16 @@ export async function createClient({ token, logger }) {
             GatewayIntentBits.Guilds,
             GatewayIntentBits.GuildMessages,
             GatewayIntentBits.GuildMessageReactions,
-            GatewayIntentBits.MessageContent
+            GatewayIntentBits.MessageContent,
+            GatewayIntentBits.GuildMembers // required for join/leave + autoban + welcome cards
         ],
-        partials: [Partials.Message, Partials.Channel, Partials.Reaction, Partials.User, Partials.GuildMember],
+        partials: [
+            Partials.Message,
+            Partials.Channel,
+            Partials.Reaction,
+            Partials.User,
+            Partials.GuildMember
+        ],
         allowedMentions: { parse: [], repliedUser: false }
     });
 
