@@ -1,5 +1,5 @@
 {
-  "token": GITHUB_TOKEN,
+  "token": "DISCORD_TOKEN",
   "applicationId": "1431956562246762577",
   "dbPath": "./squire.db.json",
   "sampleRate": 1.0,
