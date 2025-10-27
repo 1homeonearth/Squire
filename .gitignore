@@ -1,4 +1,7 @@
 node_modules/
 .env
+.*.env
 config.json
+config.local.json
 squire.db.json
+# secrets
