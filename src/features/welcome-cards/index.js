@@ -117,7 +117,7 @@ async function buildWelcomeImage(member, logger) {
         .setDisplayName(member.displayName || member.user.username)
         .setAvatarDataURL(avatarImg.toDataURL())
         .setBannerDataURL(bannerImg ? bannerImg.toDataURL() : null)
-        .setHeadline('Welcome to the server!');
+        .setHeadline('WELCOME');
 
     const buffer = await card.build({ format: 'png' });
     return new AttachmentBuilder(buffer, { name: 'welcome.png' });
