@@ -9,7 +9,7 @@ The project is written in modern ECMAScript modules on top of [`discord.js` v14]
 - **Logging forwarder** (`src/features/logging-forwarder/`)
   - Mirrors channel activity from each source guild into mapped webhooks in the Queen's Court.
   - Respects per-guild channel/category exclusion lists and a configurable sampling rate.
-  - Ships with an interactive `/setup` control panel that lets admins manage webhook mappings, sampling, and bot-forwarding toggles directly from Discord.
+  - Fully managed through the `/setup logging` panel — select the logging server, link guilds via dropdowns (with automatic webhook creation), configure exclusions, toggle bot forwards, and adjust sampling without editing files.
 - **Welcome cards** (`src/features/welcome-cards/`)
   - Builds Mee6-style welcome cards using [Canvacord](https://www.npmjs.com/package/canvacord) with avatar + banner overlays.
   - Posts reminder text pointing newcomers to the rules/roles/verification channels (with configurable channel mentions) and announces departures.
@@ -70,6 +70,7 @@ All configuration lives in `config.json`. Secrets can alternatively be provided 
 | `forwardBots` | Forward bot-authored messages when `true`. |
 | `debugLevel` | `none`, `info`, or `verbose` to control console logging verbosity. |
 | `mapping` | Object mapping **source guild IDs** to **destination webhook URLs** in the Queen's Court. |
+| `loggingChannels` | Optional map of log categories (`messages`, `moderation`, `joins`, `system`) to dedicated channel IDs in the logging server. |
 | `excludeChannels` | Per-guild arrays of source channel IDs to ignore while forwarding. |
 | `excludeCategories` | Per-guild arrays of category IDs to ignore while forwarding. |
 | `featureOrder` | Optional array of feature folder names to control load/listener registration order. |
@@ -116,14 +117,13 @@ For CI/CD you can provide a full JSON blob through `AUTOBAN_CONFIG_JSON` to over
 
 ### In-Discord setup panel
 
-Use `/setup` inside any guild where Squire is installed (and where you have the **Manage Server** permission) to open an ephemeral control panel:
+The `/setup` command exposes per-module configuration panes for operators with the **Manage Server** permission:
 
-1. **Add mapping** – prompts for a source guild ID and destination webhook URL via a modal form.
-2. **Enable/Disable bot forwards** – toggles whether bot-authored messages are mirrored.
-3. **Set sample rate** – updates the forwarder sampling factor (0–1) without restarting the bot.
-4. **Remove mapping** – select an existing guild from the dropdown to prune obsolete routes.
+- `/setup logging` — choose the central logging server, link the current guild to a channel via dropdowns (Squire creates/updates the webhook automatically), manage excluded channels/categories, assign dedicated logging channels for different event types, and tune the sampling/bot-forwarding options.
+- `/setup welcome` — pick the welcome/goodbye channel and the reminder jump points (rules, roles, verification) directly from channel lists.
+- `/setup autobouncer` — toggle the module on/off and edit the blocked keyword list in-place via modal text input.
 
-All changes write back to `config.json`, so the next bot restart picks up the latest settings without manual edits.
+Every change is persisted to `config.json`, so redeploys and restarts keep the configured state without manual file edits.
 
 ## Environment variables
 
