@@ -1,6 +1,6 @@
 // src/features/welcome-cards/index.js
 import { AttachmentBuilder } from 'discord.js';
-import { JSX, Builder, loadImage, Font } from 'canvacord';
+import { JSX, Builder, Font } from 'canvacord';
 
 const { createElement } = JSX;
 
@@ -13,12 +13,26 @@ function findByName(guild, name) {
     return guild.channels.cache.find(ch => ch.isTextBased?.() && ch.name.toLowerCase() === n) || null;
 }
 
-function mentionOrHash(guild, canon) {
+function mentionFromConfig(guild, canon, mapping) {
+    const configured = mapping?.[canon];
+    if (configured) {
+        return `<#${String(configured)}>`;
+    }
     const ch = findByName(guild, canon);
     return ch ? `<#${ch.id}>` : `#${canon}`;
 }
 
-function findWelcomeChannel(guild) {
+async function findWelcomeChannel(guild, channelId) {
+    if (channelId) {
+        const cached = guild.channels.cache.get(channelId);
+        if (cached && cached.isTextBased?.()) return cached;
+        try {
+            const fetched = await guild.channels.fetch(channelId);
+            if (fetched && fetched.isTextBased?.()) {
+                return fetched;
+            }
+        } catch {}
+    }
     return findByName(guild, 'welcome') || guild.systemChannel || null;
 }
 
@@ -28,53 +42,156 @@ class WelcomeCard extends Builder {
         super(1000, 360);
         this.bootstrap({
             displayName: '',
-            avatarDataURL: '',
-            bannerDataURL: null, // nullable
-            headline: ''
+            avatarSource: '',
+            bannerSource: null, // nullable
+            headline: '',
+            subtext: ''
         });
     }
     setDisplayName(v) { this.options.set('displayName', v); return this; }
-    setAvatarDataURL(v) { this.options.set('avatarDataURL', v); return this; }
-    setBannerDataURL(v) { this.options.set('bannerDataURL', v); return this; }
+    setAvatarSource(v) { this.options.set('avatarSource', v); return this; }
+    setBannerSource(v) { this.options.set('bannerSource', v); return this; }
     setHeadline(v) { this.options.set('headline', v); return this; }
+    setSubtext(v) { this.options.set('subtext', v); return this; }
 
     async render() {
-        const { displayName, avatarDataURL, bannerDataURL, headline } = this.options.getOptions();
+        const { displayName, avatarSource, bannerSource, headline, subtext } = this.options.getOptions();
+        const safeHeadline = headline || 'WELCOME';
+        const safeDisplayName = displayName || 'New Member';
+        const safeSubtext = subtext && String(subtext).trim().length > 0 ? subtext : null;
 
-        const background = bannerDataURL
+        const backgroundLayer = bannerSource
             ? createElement('img', {
-                src: bannerDataURL,
-                className: 'absolute inset-0 w-full h-full object-cover'
+                src: bannerSource,
+                style: {
+                    position: 'absolute',
+                    inset: 0,
+                    width: '100%',
+                    height: '100%',
+                    objectFit: 'cover'
+                }
             })
             : createElement('div', {
-                className: 'absolute inset-0 bg-gradient-to-r from-[#23272A] to-[#2B2F35]'
+                style: {
+                    position: 'absolute',
+                    inset: 0,
+                    background: 'linear-gradient(135deg, #101828 0%, #0B1220 50%, #060913 100%)'
+                }
             });
+
+        const overlayLayer = createElement('div', {
+            style: {
+                position: 'absolute',
+                inset: 0,
+                background: 'linear-gradient(160deg, rgba(15,23,42,0.92) 0%, rgba(8,13,26,0.92) 60%, rgba(3,7,18,0.95) 100%)'
+            }
+        });
+
+        const avatar = createElement(
+            'div',
+            {
+                style: {
+                    width: '168px',
+                    height: '168px',
+                    borderRadius: '50%',
+                    background: 'linear-gradient(135deg, #2563EB 0%, #1D4ED8 100%)',
+                    padding: '10px',
+                    boxShadow: '0 22px 50px rgba(8,12,24,0.55)',
+                    display: 'flex',
+                    alignItems: 'center',
+                    justifyContent: 'center'
+                }
+            },
+            createElement('img', {
+                src: avatarSource,
+                style: {
+                    width: '100%',
+                    height: '100%',
+                    borderRadius: '50%'
+                }
+            })
+        );
+
+        const headlineNode = createElement('h1', {
+            style: {
+                margin: 0,
+                marginTop: '32px',
+                fontSize: '64px',
+                fontWeight: 800,
+                letterSpacing: '0.18em',
+                textTransform: 'uppercase',
+                color: '#FFFFFF',
+                textAlign: 'center'
+            }
+        }, safeHeadline);
+
+        const nameNode = createElement('p', {
+            style: {
+                margin: 0,
+                marginTop: '18px',
+                fontSize: '40px',
+                fontWeight: 600,
+                color: '#FFFFFF',
+                textAlign: 'center'
+            }
+        }, safeDisplayName);
+
+        const subtextNode = safeSubtext ? createElement('p', {
+            style: {
+                margin: 0,
+                marginTop: '12px',
+                fontSize: '26px',
+                fontWeight: 500,
+                color: '#C7D2FE',
+                textAlign: 'center',
+                letterSpacing: '0.04em'
+            }
+        }, safeSubtext) : null;
+
+        const content = createElement(
+            'div',
+            {
+                style: {
+                    position: 'relative',
+                    width: '100%',
+                    height: '100%',
+                    display: 'flex',
+                    alignItems: 'center',
+                    justifyContent: 'center'
+                }
+            },
+            createElement(
+                'div',
+                {
+                    style: {
+                        display: 'flex',
+                        flexDirection: 'column',
+                        alignItems: 'center',
+                        justifyContent: 'center',
+                        padding: '48px 32px'
+                    }
+                },
+                avatar,
+                headlineNode,
+                nameNode,
+                subtextNode
+            )
+        );
 
         return createElement(
             'div',
-            { className: 'w-full h-full rounded-xl overflow-hidden relative' },
-            background,
-            createElement('div', {
-                className: 'absolute inset-0 bg-[#00000066]'
-            }),
-            createElement(
-                'div',
-                { className: 'relative w-full h-full flex flex-col items-center justify-center' },
-                createElement('img', {
-                    src: avatarDataURL,
-                    className: 'h-[144] w-[144] rounded-full border-[8] border-[#FFFFFF] shadow-xl'
-                }),
-                createElement(
-                    'h1',
-                    { className: 'm-0 mt-5 text-[40] font-bold text-white tracking-wide' },
-                    headline
-                ),
-                createElement(
-                    'p',
-                    { className: 'm-0 mt-2 text-[28] text-[#D1D5DB]' },
-                    displayName
-                )
-            )
+            {
+                style: {
+                    position: 'relative',
+                    width: '100%',
+                    height: '100%',
+                    borderRadius: '28px',
+                    overflow: 'hidden'
+                }
+            },
+            backgroundLayer,
+            overlayLayer,
+            content
         );
     }
 }
@@ -85,41 +202,40 @@ async function buildWelcomeImage(member, logger) {
 
     const avatarURL = member.displayAvatarURL({ extension: 'png', size: 512 });
     const bannerURL =
-    member.user.bannerURL?.({ size: 2048, extension: 'png', dynamic: true }) ||
-    member.displayBannerURL?.({ size: 2048, extension: 'png', dynamic: true }) ||
-    null;
+        member.user.bannerURL?.({ size: 2048, extension: 'png', dynamic: true }) ||
+        member.displayBannerURL?.({ size: 2048, extension: 'png', dynamic: true }) ||
+        null;
 
-    let avatarImg = null;
-    try {
-        avatarImg = await loadImage(avatarURL);
-    } catch (err) {
-        logger?.warn?.(`[welcome] failed to load avatar for ${member.user?.tag ?? member.id}: ${err?.message ?? err}`);
+    if (!avatarURL) {
+        logger?.warn?.(`[welcome] missing avatar for ${member.user?.tag ?? member.id}`);
         return null;
     }
 
-    const bannerImg = bannerURL ? await loadImage(bannerURL).catch(() => null) : null;
-
     const card = new WelcomeCard()
-        .setDisplayName(member.displayName || member.user.username)
-        .setAvatarDataURL(avatarImg.toDataURL())
-        .setBannerDataURL(bannerImg ? bannerImg.toDataURL() : null)
-        .setHeadline('just joined the server!');
+        .setDisplayName(member.displayName || member.user.globalName || member.user.username)
+        .setAvatarSource(avatarURL)
+        .setBannerSource(bannerURL)
+        .setHeadline('WELCOME')
+        .setSubtext('Welcome to the server!');
 
     const buffer = await card.build({ format: 'png' });
     return new AttachmentBuilder(buffer, { name: 'welcome.png' });
 }
 
-export function init({ client, logger }) {
+export function init({ client, logger, config }) {
+    const welcomeCfg = config?.welcome || {};
+    const mentionMap = welcomeCfg.mentions || {};
+
     client.on('guildMemberAdd', async (member) => {
         try {
             if (!member.guild) return;
-            const ch = findWelcomeChannel(member.guild);
+            const ch = await findWelcomeChannel(member.guild, welcomeCfg.channelId);
             if (!ch) return;
 
             // Plain helper line above the image
-            const rules  = mentionOrHash(member.guild, 'rules');
-            const roles  = mentionOrHash(member.guild, 'roles');
-            const verify = mentionOrHash(member.guild, 'verify');
+            const rules  = mentionFromConfig(member.guild, 'rules', mentionMap);
+            const roles  = mentionFromConfig(member.guild, 'roles', mentionMap);
+            const verify = mentionFromConfig(member.guild, 'verify', mentionMap);
             await ch.send(`Please read our ${rules}, select your ${roles}, and then ${verify} to unlock the full server.`);
 
             const image = await buildWelcomeImage(member, logger);
@@ -136,7 +252,7 @@ export function init({ client, logger }) {
     client.on('guildMemberRemove', async (member) => {
         try {
             if (!member.guild) return;
-            const ch = findWelcomeChannel(member.guild);
+            const ch = await findWelcomeChannel(member.guild, welcomeCfg.channelId);
             if (!ch) return;
             const name = member.displayName || member.user?.username || 'A member';
             await ch.send(`👋 ${name} left the server.`);
