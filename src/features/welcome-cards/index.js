@@ -2,6 +2,8 @@
 import { AttachmentBuilder } from 'discord.js';
 import { JSX, Builder, loadImage, Font } from 'canvacord';
 
+const { createElement } = JSX;
+
 // Load the built-in font once
 Font.loadDefault();
 
@@ -39,25 +41,40 @@ class WelcomeCard extends Builder {
     async render() {
         const { displayName, avatarDataURL, bannerDataURL, headline } = this.options.getOptions();
 
-        return (
-            <div className="w-full h-full rounded-xl overflow-hidden relative">
-            {/* Background: banner if we have it, else a subtle gradient */}
-            {bannerDataURL
-                ? <img src={bannerDataURL} className="absolute inset-0 w-full h-full object-cover" />
-                : <div className="absolute inset-0 bg-gradient-to-r from-[#23272A] to-[#2B2F35]" />}
+        const background = bannerDataURL
+            ? createElement('img', {
+                src: bannerDataURL,
+                className: 'absolute inset-0 w-full h-full object-cover'
+            })
+            : createElement('div', {
+                className: 'absolute inset-0 bg-gradient-to-r from-[#23272A] to-[#2B2F35]'
+            });
 
-                {/* Dark scrim so text stays readable */}
-                <div className="absolute inset-0 bg-[#00000066]" />
-
-                {/* Foreground */}
-                <div className="relative w-full h-full flex flex-col items-center justify-center">
-                <img src={avatarDataURL} className="h-[144] w-[144] rounded-full border-[8] border-[#FFFFFF] shadow-xl" />
-                <h1 className="m-0 mt-5 text-[40] font-bold text-white tracking-wide">
-                {headline}
-                </h1>
-                <p className="m-0 mt-2 text-[28] text-[#D1D5DB]">{displayName}</p>
-                </div>
-                </div>
+        return createElement(
+            'div',
+            { className: 'w-full h-full rounded-xl overflow-hidden relative' },
+            background,
+            createElement('div', {
+                className: 'absolute inset-0 bg-[#00000066]'
+            }),
+            createElement(
+                'div',
+                { className: 'relative w-full h-full flex flex-col items-center justify-center' },
+                createElement('img', {
+                    src: avatarDataURL,
+                    className: 'h-[144] w-[144] rounded-full border-[8] border-[#FFFFFF] shadow-xl'
+                }),
+                createElement(
+                    'h1',
+                    { className: 'm-0 mt-5 text-[40] font-bold text-white tracking-wide' },
+                    headline
+                ),
+                createElement(
+                    'p',
+                    { className: 'm-0 mt-2 text-[28] text-[#D1D5DB]' },
+                    displayName
+                )
+            )
         );
     }
 }
@@ -83,10 +100,10 @@ async function buildWelcomeImage(member, logger) {
     const bannerImg = bannerURL ? await loadImage(bannerURL).catch(() => null) : null;
 
     const card = new WelcomeCard()
-    .setDisplayName(member.displayName || member.user.username)
-    .setAvatarDataURL(avatarImg.toDataURL())
-    .setBannerDataURL(bannerImg ? bannerImg.toDataURL() : null)
-    .setHeadline('just joined the server!');
+        .setDisplayName(member.displayName || member.user.username)
+        .setAvatarDataURL(avatarImg.toDataURL())
+        .setBannerDataURL(bannerImg ? bannerImg.toDataURL() : null)
+        .setHeadline('just joined the server!');
 
     const buffer = await card.build({ format: 'png' });
     return new AttachmentBuilder(buffer, { name: 'welcome.png' });
