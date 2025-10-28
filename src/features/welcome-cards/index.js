@@ -61,7 +61,7 @@ class WelcomeCard extends Builder {
                 className: 'absolute inset-0 w-full h-full object-cover'
             })
             : createElement('div', {
-                className: 'absolute inset-0 bg-gradient-to-r from-[#23272A] to-[#2B2F35]'
+                className: 'absolute inset-0 bg-linear-to-r from-[#23272A] to-[#2B2F35]'
             });
 
         return createElement(

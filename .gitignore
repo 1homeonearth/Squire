@@ -8,3 +8,4 @@ squire.db.json
 squire.db
 color_state.json
 *.log
+config.json.bak.*
