@@ -215,8 +215,8 @@ async function buildWelcomeImage(member, logger) {
         .setDisplayName(member.displayName || member.user.globalName || member.user.username)
         .setAvatarSource(avatarURL)
         .setBannerSource(bannerURL)
-        .setHeadline('WELCOME')
-        .setSubtext('Welcome to the server!');
+        .setHeadline('WELCOME TO THE SERVER!')
+        .setSubtext(`We're glad you're here, ${member.displayName || member.user.username}!`);
 
     const buffer = await card.build({ format: 'png' });
     return new AttachmentBuilder(buffer, { name: 'welcome.png' });
@@ -236,11 +236,13 @@ export function init({ client, logger, config }) {
             const rules  = mentionFromConfig(member.guild, 'rules', mentionMap);
             const roles  = mentionFromConfig(member.guild, 'roles', mentionMap);
             const verify = mentionFromConfig(member.guild, 'verify', mentionMap);
-            await ch.send(`Please read our ${rules}, select your ${roles}, and then ${verify} to unlock the full server.`);
+            const plainText = `Please read our ${rules}, select your ${roles}, and then ${verify} to unlock the full server.`;
 
             const image = await buildWelcomeImage(member, logger);
             if (image) {
-                await ch.send({ files: [image] });
+                await ch.send({ content: plainText, files: [image] });
+            } else {
+                await ch.send(plainText);
             }
         } catch (e) {
             const name = member.guild?.name ?? member.guild?.id ?? 'unknown guild';
