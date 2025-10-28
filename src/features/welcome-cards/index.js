@@ -2,6 +2,8 @@
 import { AttachmentBuilder } from 'discord.js';
 import { JSX, Builder, loadImage, Font } from 'canvacord';
 
+const { createElement } = JSX;
+
 // Load the built-in font once
 Font.loadDefault();
 
@@ -39,30 +41,45 @@ class WelcomeCard extends Builder {
     async render() {
         const { displayName, avatarDataURL, bannerDataURL, headline } = this.options.getOptions();
 
-        return (
-            <div className="w-full h-full rounded-xl overflow-hidden relative">
-            {/* Background: banner if we have it, else a subtle gradient */}
-            {bannerDataURL
-                ? <img src={bannerDataURL} className="absolute inset-0 w-full h-full object-cover" />
-                : <div className="absolute inset-0 bg-gradient-to-r from-[#23272A] to-[#2B2F35]" />}
+        const background = bannerDataURL
+            ? createElement('img', {
+                src: bannerDataURL,
+                className: 'absolute inset-0 w-full h-full object-cover'
+            })
+            : createElement('div', {
+                className: 'absolute inset-0 bg-gradient-to-r from-[#23272A] to-[#2B2F35]'
+            });
 
-                {/* Dark scrim so text stays readable */}
-                <div className="absolute inset-0 bg-[#00000066]" />
-
-                {/* Foreground */}
-                <div className="relative w-full h-full flex flex-col items-center justify-center">
-                <img src={avatarDataURL} className="h-[144] w-[144] rounded-full border-[8] border-[#FFFFFF] shadow-xl" />
-                <h1 className="m-0 mt-5 text-[40] font-bold text-white tracking-wide">
-                {headline}
-                </h1>
-                <p className="m-0 mt-2 text-[28] text-[#D1D5DB]">{displayName}</p>
-                </div>
-                </div>
+        return createElement(
+            'div',
+            { className: 'w-full h-full rounded-xl overflow-hidden relative' },
+            background,
+            createElement('div', {
+                className: 'absolute inset-0 bg-[#00000066]'
+            }),
+            createElement(
+                'div',
+                { className: 'relative w-full h-full flex flex-col items-center justify-center' },
+                createElement('img', {
+                    src: avatarDataURL,
+                    className: 'h-[144] w-[144] rounded-full border-[8] border-[#FFFFFF] shadow-xl'
+                }),
+                createElement(
+                    'h1',
+                    { className: 'm-0 mt-5 text-[40] font-bold text-white tracking-wide' },
+                    headline
+                ),
+                createElement(
+                    'p',
+                    { className: 'm-0 mt-2 text-[28] text-[#D1D5DB]' },
+                    displayName
+                )
+            )
         );
     }
 }
 
-async function buildWelcomeImage(member) {
+async function buildWelcomeImage(member, logger) {
     // Ensure we have the freshest user data (banners often require an explicit fetch)
     try { await member.user.fetch(true); } catch {}
 
@@ -72,22 +89,30 @@ async function buildWelcomeImage(member) {
     member.displayBannerURL?.({ size: 2048, extension: 'png', dynamic: true }) ||
     null;
 
-    const avatarImg = await loadImage(avatarURL);
+    let avatarImg = null;
+    try {
+        avatarImg = await loadImage(avatarURL);
+    } catch (err) {
+        logger?.warn?.(`[welcome] failed to load avatar for ${member.user?.tag ?? member.id}: ${err?.message ?? err}`);
+        return null;
+    }
+
     const bannerImg = bannerURL ? await loadImage(bannerURL).catch(() => null) : null;
 
     const card = new WelcomeCard()
-    .setDisplayName(member.displayName || member.user.username)
-    .setAvatarDataURL(avatarImg.toDataURL())
-    .setBannerDataURL(bannerImg ? bannerImg.toDataURL() : null)
-    .setHeadline('just joined the server!');
+        .setDisplayName(member.displayName || member.user.username)
+        .setAvatarDataURL(avatarImg.toDataURL())
+        .setBannerDataURL(bannerImg ? bannerImg.toDataURL() : null)
+        .setHeadline('just joined the server!');
 
     const buffer = await card.build({ format: 'png' });
     return new AttachmentBuilder(buffer, { name: 'welcome.png' });
 }
 
-export function init(client) {
+export function init({ client, logger }) {
     client.on('guildMemberAdd', async (member) => {
         try {
+            if (!member.guild) return;
             const ch = findWelcomeChannel(member.guild);
             if (!ch) return;
 
@@ -97,21 +122,28 @@ export function init(client) {
             const verify = mentionOrHash(member.guild, 'verify');
             await ch.send(`Please read our ${rules}, select your ${roles}, and then ${verify} to unlock the full server.`);
 
-            const image = await buildWelcomeImage(member);
-            await ch.send({ files: [image] });
+            const image = await buildWelcomeImage(member, logger);
+            if (image) {
+                await ch.send({ files: [image] });
+            }
         } catch (e) {
-            console.error(`[welcome] failed to send welcome in ${member.guild?.name}:`, e?.message || e);
+            const name = member.guild?.name ?? member.guild?.id ?? 'unknown guild';
+            const msg = e?.message || e;
+            logger?.error?.(`[welcome] failed to send welcome in ${name}: ${msg}`);
         }
     });
 
     client.on('guildMemberRemove', async (member) => {
         try {
+            if (!member.guild) return;
             const ch = findWelcomeChannel(member.guild);
             if (!ch) return;
             const name = member.displayName || member.user?.username || 'A member';
             await ch.send(`👋 ${name} left the server.`);
         } catch (e) {
-            console.error(`[welcome] failed to send goodbye in ${member.guild?.name}:`, e?.message || e);
+            const guildName = member.guild?.name ?? member.guild?.id ?? 'unknown guild';
+            const msg = e?.message || e;
+            logger?.error?.(`[welcome] failed to send goodbye in ${guildName}: ${msg}`);
         }
     });
 }

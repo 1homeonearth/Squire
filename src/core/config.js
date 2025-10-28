@@ -25,6 +25,15 @@ export function loadConfig() {
     if (process.env.MAPPING_JSON)         over.mapping = safeJSON(process.env.MAPPING_JSON, fileCfg.mapping);
     if (process.env.EXCLUDE_CHANNELS_JSON)over.excludeChannels = safeJSON(process.env.EXCLUDE_CHANNELS_JSON, fileCfg.excludeChannels);
     if (process.env.EXCLUDE_CATEGORIES_JSON) over.excludeCategories = safeJSON(process.env.EXCLUDE_CATEGORIES_JSON, fileCfg.excludeCategories);
+    if (process.env.AUTOBAN_CONFIG_JSON)  over.autoban = safeJSON(process.env.AUTOBAN_CONFIG_JSON, fileCfg.autoban);
+
+    if (typeof over.mapping === 'string') {
+        over.mapping = safeJSON(over.mapping, {});
+    }
+
+    if (!over.autoban || typeof over.autoban !== 'object') {
+        over.autoban = fileCfg.autoban && typeof fileCfg.autoban === 'object' ? { ...fileCfg.autoban } : {};
+    }
 
     return over;
 }
