@@ -51,6 +51,9 @@ class WelcomeCard extends Builder {
     setDisplayName(v) { this.options.set('displayName', v); return this; }
     setAvatarSource(v) { this.options.set('avatarSource', v); return this; }
     setBannerSource(v) { this.options.set('bannerSource', v); return this; }
+    // Compatibility helpers: older branches still call the DataURL methods, so alias them.
+    setAvatarDataURL(v) { return this.setAvatarSource(v); }
+    setBannerDataURL(v) { return this.setBannerSource(v); }
     setHeadline(v) { this.options.set('headline', v); return this; }
     setSubtext(v) { this.options.set('subtext', v); return this; }
 
@@ -196,6 +199,16 @@ class WelcomeCard extends Builder {
     }
 }
 
+function selectPreferredName(member) {
+    return (
+        member.displayName ||
+        member.user?.globalName ||
+        member.user?.username ||
+        member.user?.tag ||
+        member.id
+    );
+}
+
 async function buildWelcomeImage(member, logger) {
     // Ensure we have the freshest user data (banners often require an explicit fetch)
     try { await member.user.fetch(true); } catch {}
@@ -211,12 +224,7 @@ async function buildWelcomeImage(member, logger) {
         return null;
     }
 
-    const preferredName =
-        member.displayName ||
-        member.user?.globalName ||
-        member.user?.username ||
-        member.user?.tag ||
-        member.id;
+    const preferredName = selectPreferredName(member);
 
     const card = new WelcomeCard()
         .setDisplayName(preferredName)
