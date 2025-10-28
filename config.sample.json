@@ -6,6 +6,11 @@
   "forwardBots": true,
   "debugLevel": "info",
   "loggingServerId": "1431923234567360542",
+  "featureOrder": [
+    "auto-bouncer",
+    "logging-forwarder",
+    "welcome-cards"
+  ],
   "mapping": {
     "1129906023084343346": "https://discord.com/api/webhooks/xxx/yyy",
     "1391983429553492049": "https://discord.com/api/webhooks/aaa/bbb"
@@ -41,7 +46,18 @@
     "blockedUsernames": ["mega", "megas", "link", "links"],
     "verifiedRoleIds": ["123456789012345678"],
     "notifyChannelId": "987654321098765432",
+    "notifyWebhookUrls": [
+      "https://discord.com/api/webhooks/ccc/ddd"
+    ],
     "deleteMessageSeconds": 0
+  },
+  "welcome": {
+    "channelId": "555555555555555555",
+    "mentions": {
+      "rules": "666666666666666666",
+      "roles": "777777777777777777",
+      "verify": "888888888888888888"
+    }
   }
 }
 

@@ -12,10 +12,10 @@ The project is written in modern ECMAScript modules on top of [`discord.js` v14]
   - Ships with an interactive `/setup` control panel that lets admins manage webhook mappings, sampling, and bot-forwarding toggles directly from Discord.
 - **Welcome cards** (`src/features/welcome-cards/`)
   - Builds Mee6-style welcome cards using [Canvacord](https://www.npmjs.com/package/canvacord) with avatar + banner overlays.
-  - Posts reminder text pointing newcomers to the rules/roles/verification channels and announces departures.
+  - Posts reminder text pointing newcomers to the rules/roles/verification channels (with configurable channel mentions) and announces departures.
 - **Auto bouncer** (`src/features/auto-bouncer/`)
   - Instantly bans unverified accounts whose username, display name, or global name contains known spam terms (mega/megas/link/links by default).
-  - Optional notification channel + verified-role exemptions so trusted members or staff can bypass the filter.
+  - Optional notification channel/webhooks + verified-role exemptions so trusted members or staff can bypass the filter.
   - Persists every decision (success, permission failure, unexpected error) to the LokiJS database for auditability.
 
 ## Repository layout
@@ -72,7 +72,9 @@ All configuration lives in `config.json`. Secrets can alternatively be provided 
 | `mapping` | Object mapping **source guild IDs** to **destination webhook URLs** in the Queen's Court. |
 | `excludeChannels` | Per-guild arrays of source channel IDs to ignore while forwarding. |
 | `excludeCategories` | Per-guild arrays of category IDs to ignore while forwarding. |
+| `featureOrder` | Optional array of feature folder names to control load/listener registration order. |
 | `autoban` | Auto-bouncer config block (see below). |
+| `welcome` | Welcome card config block (see below). |
 
 ### Auto-bouncer config
 
@@ -82,6 +84,7 @@ All configuration lives in `config.json`. Secrets can alternatively be provided 
   "blockedUsernames": ["mega", "megas", "link", "links"],
   "verifiedRoleIds": ["ROLE_ID_THAT_MARKS_VERIFIED_MEMBERS"],
   "notifyChannelId": "CHANNEL_ID_FOR_LOGGING_ACTIONS",
+  "notifyWebhookUrls": ["https://discord.com/api/webhooks/..."],
   "deleteMessageSeconds": 0
 }
 ```
@@ -90,9 +93,26 @@ All configuration lives in `config.json`. Secrets can alternatively be provided 
 - `blockedUsernames` is case-insensitive and deduplicated; supply any suspicious keywords you want to catch.
 - `verifiedRoleIds` lets you exempt members who already own the "Verified" role (or any trusted role) at join time.
 - `notifyChannelId` is optional; when set, the bot posts success/failure messages into that text channel.
+- `notifyWebhookUrls` is optional; provide one or more webhook URLs to receive the same moderation log events inside a dedicated logging server.
 - `deleteMessageSeconds` controls how far back Discord should purge the member's messages when banning (0 keeps history).
 
 For CI/CD you can provide a full JSON blob through `AUTOBAN_CONFIG_JSON` to override the file at deploy time.
+
+### Welcome card config
+
+```json
+"welcome": {
+  "channelId": "WELCOME_CHANNEL_ID",
+  "mentions": {
+    "rules": "RULES_CHANNEL_ID",
+    "roles": "ROLES_CHANNEL_ID",
+    "verify": "VERIFY_CHANNEL_ID"
+  }
+}
+```
+
+- `channelId` forces the welcome module to post into a specific text channel instead of auto-detecting one by name.
+- `mentions` replaces the placeholder channel names in the welcome reminder text with proper clickable mentions.
 
 ### In-Discord setup panel
 
