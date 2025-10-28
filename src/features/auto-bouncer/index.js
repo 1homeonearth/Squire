@@ -77,48 +77,61 @@ function truncateWebhook(url) {
 }
 
 export function init({ client, logger, config, db }) {
-    const autobanCfg = config.autoban || {};
-    const enabled = autobanCfg.enabled !== false;
-    if (!enabled) {
-        logger?.info?.('[autoban] Disabled via config.');
-        return;
-    }
-
-    const blockedTerms = normaliseTerms(autobanCfg.blockedUsernames || DEFAULT_BLOCKED_TERMS);
-    if (!blockedTerms.length) {
-        logger?.warn?.('[autoban] No blocked username terms configured; feature will not run.');
-        return;
+    if (!config.autoban || typeof config.autoban !== 'object') {
+        config.autoban = {};
     }
 
     const moderationEvents = db ? ensureCollection(db, 'moderation_events', { indices: ['guildId', 'userId', 'type'] }) : null;
 
-    const verifiedRoleIds = new Set(
-        Array.isArray(autobanCfg.verifiedRoleIds) ? autobanCfg.verifiedRoleIds.map(String) : []
-    );
-    const notifyChannelId = typeof autobanCfg.notifyChannelId === 'string' ? autobanCfg.notifyChannelId : null;
-    const notifyWebhooks = normaliseWebhookUrls(autobanCfg.notifyWebhookUrls ?? autobanCfg.notifyWebhookUrl);
-    const deleteMessageSeconds = Number.isInteger(autobanCfg.deleteMessageSeconds)
-        ? Math.max(0, autobanCfg.deleteMessageSeconds)
-        : 0;
+    function getConfig() {
+        const autobanCfg = config.autoban || {};
+        return {
+            enabled: autobanCfg.enabled !== false,
+            blockedTerms: normaliseTerms(autobanCfg.blockedUsernames || DEFAULT_BLOCKED_TERMS),
+            verifiedRoleIds: new Set(Array.isArray(autobanCfg.verifiedRoleIds) ? autobanCfg.verifiedRoleIds.map(String) : []),
+            notifyChannelId: typeof autobanCfg.notifyChannelId === 'string' ? autobanCfg.notifyChannelId : null,
+            notifyWebhooks: normaliseWebhookUrls(autobanCfg.notifyWebhookUrls ?? autobanCfg.notifyWebhookUrl),
+            deleteMessageSeconds: Number.isInteger(autobanCfg.deleteMessageSeconds)
+                ? Math.max(0, autobanCfg.deleteMessageSeconds)
+                : 0
+        };
+    }
+
+    const initial = getConfig();
+    if (!initial.enabled) {
+        logger?.info?.('[autoban] Disabled via config.');
+    } else if (!initial.blockedTerms.length) {
+        logger?.warn?.('[autoban] No blocked username terms configured; feature will not run until configured.');
+    } else {
+        logger?.info?.(`[autoban] Watching for ${initial.blockedTerms.length} blocked term(s).`);
+    }
 
     client.on('guildMemberAdd', async (member) => {
         try {
             if (!member.guild) return;
 
-            if (verifiedRoleIds.size > 0 && member.roles?.cache?.some(role => verifiedRoleIds.has(role.id))) {
+            const cfg = getConfig();
+            if (!cfg.enabled) return;
+
+            if (!cfg.blockedTerms.length) return;
+
+            if (cfg.verifiedRoleIds.size > 0 && member.roles?.cache?.some(role => cfg.verifiedRoleIds.has(role.id))) {
                 return; // already verified
             }
 
             const names = collectCandidateNames(member);
             if (names.length === 0) return;
 
-            const matchedTerm = blockedTerms.find(term => names.some(name => name.includes(term)));
+            const matchedTerm = cfg.blockedTerms.find(term => names.some(name => name.includes(term)));
             if (!matchedTerm) return;
 
             const reason = `Auto-ban: username contained "${matchedTerm}"`;
 
+            const guildName = member.guild?.name ?? 'Unknown Server';
+            const guildId = member.guild?.id ?? 'unknown';
+
             if (!member.bannable) {
-                logger?.warn?.(`[autoban] Lacked permission to ban ${member.user?.tag ?? member.id}: ${reason}`);
+                logger?.warn?.(`[autoban] Lacked permission to ban ${member.user?.tag ?? member.id} in guild ${guildName} (${guildId}): ${reason}`);
                 moderationEvents?.insert({
                     type: 'autoban',
                     guildId: member.guild?.id ?? null,
@@ -133,19 +146,27 @@ export function init({ client, logger, config, db }) {
                         displayName: member.displayName ?? null
                     }
                 });
-                if (notifyChannelId) {
-                    const notifyChannel = await resolveLogChannel(member.guild, notifyChannelId);
-                    await safeNotify(notifyChannel, `⚠️ Could not auto-ban **${member.user?.tag ?? member.id}** — missing permissions.`, logger);
+                if (cfg.notifyChannelId) {
+                    const notifyChannel = await resolveLogChannel(member.guild, cfg.notifyChannelId);
+                    await safeNotify(
+                        notifyChannel,
+                        `⚠️ Could not auto-ban **${member.user?.tag ?? member.id}** in **${guildName}** (ID: ${guildId}) — missing permissions.`,
+                        logger
+                    );
                 }
-                if (notifyWebhooks.length) {
-                    await safeWebhookNotify(notifyWebhooks, `⚠️ Could not auto-ban **${member.user?.tag ?? member.id}** — missing permissions.`, logger);
+                if (cfg.notifyWebhooks.length) {
+                    await safeWebhookNotify(
+                        cfg.notifyWebhooks,
+                        `⚠️ Could not auto-ban **${member.user?.tag ?? member.id}** in **${guildName}** (ID: ${guildId}) — missing permissions.`,
+                        logger
+                    );
                 }
                 return;
             }
 
-            await member.ban({ reason, deleteMessageSeconds });
+            await member.ban({ reason, deleteMessageSeconds: cfg.deleteMessageSeconds });
 
-            logger?.info?.(`[autoban] Banned ${member.user?.tag ?? member.id} (${member.id}) — matched term "${matchedTerm}".`);
+            logger?.info?.(`[autoban] Banned ${member.user?.tag ?? member.id} (${member.id}) in guild ${guildName} (${guildId}) — matched term "${matchedTerm}".`);
 
             moderationEvents?.insert({
                 type: 'autoban',
@@ -162,18 +183,18 @@ export function init({ client, logger, config, db }) {
                 }
             });
 
-            if (notifyChannelId) {
-                const notifyChannel = await resolveLogChannel(member.guild, notifyChannelId);
+            if (cfg.notifyChannelId) {
+                const notifyChannel = await resolveLogChannel(member.guild, cfg.notifyChannelId);
                 await safeNotify(
                     notifyChannel,
-                    `🚫 Auto-banned **${member.user?.tag ?? member.id}** — username matched "${matchedTerm}".`,
+                    `🚫 Auto-banned **${member.user?.tag ?? member.id}** in **${guildName}** (ID: ${guildId}) — username matched "${matchedTerm}".`,
                     logger
                 );
             }
-            if (notifyWebhooks.length) {
+            if (cfg.notifyWebhooks.length) {
                 await safeWebhookNotify(
-                    notifyWebhooks,
-                    `🚫 Auto-banned **${member.user?.tag ?? member.id}** — username matched "${matchedTerm}".`,
+                    cfg.notifyWebhooks,
+                    `🚫 Auto-banned **${member.user?.tag ?? member.id}** in **${guildName}** (ID: ${guildId}) — username matched "${matchedTerm}".`,
                     logger
                 );
             }
