@@ -211,12 +211,19 @@ async function buildWelcomeImage(member, logger) {
         return null;
     }
 
+    const preferredName =
+        member.displayName ||
+        member.user?.globalName ||
+        member.user?.username ||
+        member.user?.tag ||
+        member.id;
+
     const card = new WelcomeCard()
-        .setDisplayName(member.displayName || member.user.globalName || member.user.username)
+        .setDisplayName(preferredName)
         .setAvatarSource(avatarURL)
         .setBannerSource(bannerURL)
         .setHeadline('WELCOME TO THE SERVER!')
-        .setSubtext(`We're glad you're here, ${member.displayName || member.user.username}!`);
+        .setSubtext(`We're glad you're here, ${preferredName}!`);
 
     const buffer = await card.build({ format: 'png' });
     return new AttachmentBuilder(buffer, { name: 'welcome.png' });
