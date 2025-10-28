@@ -2,6 +2,7 @@
 // Automatically bans freshly-joined members whose usernames contain
 // suspicious keywords (mega/links spam bots, etc.).
 
+import { WebhookClient } from 'discord.js';
 import { ensureCollection } from '../../core/db.js';
 
 const DEFAULT_BLOCKED_TERMS = ['mega', 'megas', 'link', 'links'];
@@ -52,6 +53,29 @@ async function safeNotify(channel, message, logger) {
     }
 }
 
+async function safeWebhookNotify(urls, message, logger) {
+    const list = Array.isArray(urls) ? urls : urls ? [urls] : [];
+    await Promise.all(list.map(async (url) => {
+        if (!url) return;
+        try {
+            const client = new WebhookClient({ url });
+            await client.send({ content: message });
+            client.destroy?.();
+        } catch (err) {
+            logger?.warn?.(`[autoban] Failed to notify webhook ${truncateWebhook(url)}: ${err?.message ?? err}`);
+        }
+    }));
+}
+
+function truncateWebhook(url) {
+    try {
+        const u = new URL(url);
+        return `${u.host}/${u.pathname.split('/').slice(-2).join('/')}`;
+    } catch {
+        return typeof url === 'string' && url.length > 40 ? `${url.slice(0, 37)}…` : String(url || 'unknown');
+    }
+}
+
 export function init({ client, logger, config, db }) {
     const autobanCfg = config.autoban || {};
     const enabled = autobanCfg.enabled !== false;
@@ -72,6 +96,7 @@ export function init({ client, logger, config, db }) {
         Array.isArray(autobanCfg.verifiedRoleIds) ? autobanCfg.verifiedRoleIds.map(String) : []
     );
     const notifyChannelId = typeof autobanCfg.notifyChannelId === 'string' ? autobanCfg.notifyChannelId : null;
+    const notifyWebhooks = normaliseWebhookUrls(autobanCfg.notifyWebhookUrls ?? autobanCfg.notifyWebhookUrl);
     const deleteMessageSeconds = Number.isInteger(autobanCfg.deleteMessageSeconds)
         ? Math.max(0, autobanCfg.deleteMessageSeconds)
         : 0;
@@ -112,6 +137,9 @@ export function init({ client, logger, config, db }) {
                     const notifyChannel = await resolveLogChannel(member.guild, notifyChannelId);
                     await safeNotify(notifyChannel, `⚠️ Could not auto-ban **${member.user?.tag ?? member.id}** — missing permissions.`, logger);
                 }
+                if (notifyWebhooks.length) {
+                    await safeWebhookNotify(notifyWebhooks, `⚠️ Could not auto-ban **${member.user?.tag ?? member.id}** — missing permissions.`, logger);
+                }
                 return;
             }
 
@@ -142,6 +170,13 @@ export function init({ client, logger, config, db }) {
                     logger
                 );
             }
+            if (notifyWebhooks.length) {
+                await safeWebhookNotify(
+                    notifyWebhooks,
+                    `🚫 Auto-banned **${member.user?.tag ?? member.id}** — username matched "${matchedTerm}".`,
+                    logger
+                );
+            }
         } catch (err) {
             logger?.error?.(`[autoban] Failed while processing new member ${member.id}: ${err?.message ?? err}`);
             moderationEvents?.insert({
@@ -160,4 +195,12 @@ export function init({ client, logger, config, db }) {
             });
         }
     });
+}
+
+function normaliseWebhookUrls(value) {
+    if (!value) return [];
+    const raw = Array.isArray(value) ? value : [value];
+    return raw
+        .map(v => typeof v === 'string' ? v.trim() : '')
+        .filter(Boolean);
 }

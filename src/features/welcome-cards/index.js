@@ -13,12 +13,26 @@ function findByName(guild, name) {
     return guild.channels.cache.find(ch => ch.isTextBased?.() && ch.name.toLowerCase() === n) || null;
 }
 
-function mentionOrHash(guild, canon) {
+function mentionFromConfig(guild, canon, mapping) {
+    const configured = mapping?.[canon];
+    if (configured) {
+        return `<#${String(configured)}>`;
+    }
     const ch = findByName(guild, canon);
     return ch ? `<#${ch.id}>` : `#${canon}`;
 }
 
-function findWelcomeChannel(guild) {
+async function findWelcomeChannel(guild, channelId) {
+    if (channelId) {
+        const cached = guild.channels.cache.get(channelId);
+        if (cached && cached.isTextBased?.()) return cached;
+        try {
+            const fetched = await guild.channels.fetch(channelId);
+            if (fetched && fetched.isTextBased?.()) {
+                return fetched;
+            }
+        } catch {}
+    }
     return findByName(guild, 'welcome') || guild.systemChannel || null;
 }
 
@@ -103,23 +117,26 @@ async function buildWelcomeImage(member, logger) {
         .setDisplayName(member.displayName || member.user.username)
         .setAvatarDataURL(avatarImg.toDataURL())
         .setBannerDataURL(bannerImg ? bannerImg.toDataURL() : null)
-        .setHeadline('just joined the server!');
+        .setHeadline('Welcome to the server!');
 
     const buffer = await card.build({ format: 'png' });
     return new AttachmentBuilder(buffer, { name: 'welcome.png' });
 }
 
-export function init({ client, logger }) {
+export function init({ client, logger, config }) {
+    const welcomeCfg = config?.welcome || {};
+    const mentionMap = welcomeCfg.mentions || {};
+
     client.on('guildMemberAdd', async (member) => {
         try {
             if (!member.guild) return;
-            const ch = findWelcomeChannel(member.guild);
+            const ch = await findWelcomeChannel(member.guild, welcomeCfg.channelId);
             if (!ch) return;
 
             // Plain helper line above the image
-            const rules  = mentionOrHash(member.guild, 'rules');
-            const roles  = mentionOrHash(member.guild, 'roles');
-            const verify = mentionOrHash(member.guild, 'verify');
+            const rules  = mentionFromConfig(member.guild, 'rules', mentionMap);
+            const roles  = mentionFromConfig(member.guild, 'roles', mentionMap);
+            const verify = mentionFromConfig(member.guild, 'verify', mentionMap);
             await ch.send(`Please read our ${rules}, select your ${roles}, and then ${verify} to unlock the full server.`);
 
             const image = await buildWelcomeImage(member, logger);
@@ -136,7 +153,7 @@ export function init({ client, logger }) {
     client.on('guildMemberRemove', async (member) => {
         try {
             if (!member.guild) return;
-            const ch = findWelcomeChannel(member.guild);
+            const ch = await findWelcomeChannel(member.guild, welcomeCfg.channelId);
             if (!ch) return;
             const name = member.displayName || member.user?.username || 'A member';
             await ch.send(`👋 ${name} left the server.`);
