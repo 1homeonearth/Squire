@@ -28,6 +28,17 @@ function nextColorGen() {
 
 const nextColor = nextColorGen();
 
+const runtime = {
+    config: null,
+    logger: null,
+    bridges: new Map(),
+    channelLookup: new Map(),
+    knownWebhookIds: new Set(),
+    webhookCache: new Map(),
+    messageLinks: new Map(),
+    dirty: true
+};
+
 function parseWebhookUrl(url) {
     if (typeof url !== 'string') return null;
     const match = url.match(/\/api\/webhooks\/(\d+)\/([^/?#]+)/);
@@ -85,6 +96,109 @@ function buildChannelLookup(bridges) {
         }
     }
     return channelMap;
+}
+
+function rebuildState() {
+    const { config, logger } = runtime;
+    if (!config) {
+        runtime.bridges = new Map();
+        runtime.channelLookup = new Map();
+        runtime.knownWebhookIds = new Set();
+        runtime.dirty = false;
+        return runtime;
+    }
+
+    config.rainbowBridge = normalizeRainbowBridgeConfig(config.rainbowBridge);
+    const base = config.rainbowBridge ?? {};
+    const nextBridges = new Map();
+    const knownWebhookIds = new Set();
+    const validWebhookKeys = new Set();
+
+    for (const [bridgeId, entry] of Object.entries(base.bridges ?? {})) {
+        if (!bridgeId || !entry || typeof entry !== 'object') continue;
+
+        const normalized = {
+            id: bridgeId,
+            name: entry.name ?? bridgeId,
+            forwardBots: entry.forwardBots === undefined
+                ? base.forwardBots
+                : entry.forwardBots,
+            channels: []
+        };
+
+        for (const channelEntry of entry.channels ?? []) {
+            const parsed = parseWebhookUrl(channelEntry.webhookUrl);
+            if (!parsed) {
+                logger?.warn?.(`[rainbow-bridge] Skipping channel ${channelEntry.channelId} in bridge ${bridgeId}: invalid webhook URL.`);
+                continue;
+            }
+
+            normalized.channels.push({
+                guildId: channelEntry.guildId,
+                channelId: channelEntry.channelId,
+                webhookUrl: channelEntry.webhookUrl,
+                webhookId: parsed.id,
+                webhookToken: parsed.token,
+                name: channelEntry.name ?? null
+            });
+
+            knownWebhookIds.add(parsed.id);
+            validWebhookKeys.add(`${parsed.id}:${parsed.token}`);
+        }
+
+        if (normalized.channels.length >= 2) {
+            nextBridges.set(bridgeId, normalized);
+        } else if (normalized.channels.length > 0) {
+            logger?.warn?.(`[rainbow-bridge] Bridge ${bridgeId} ignored — it needs at least two linked channels.`);
+        }
+    }
+
+    runtime.bridges = nextBridges;
+    runtime.channelLookup = buildChannelLookup(nextBridges);
+    runtime.knownWebhookIds = knownWebhookIds;
+    runtime.dirty = false;
+
+    for (const [messageId, bridgeMap] of runtime.messageLinks.entries()) {
+        for (const bridgeId of bridgeMap.keys()) {
+            if (!nextBridges.has(bridgeId)) {
+                bridgeMap.delete(bridgeId);
+            }
+        }
+        if (!bridgeMap.size) {
+            runtime.messageLinks.delete(messageId);
+        }
+    }
+
+    for (const key of Array.from(runtime.webhookCache.keys())) {
+        if (!validWebhookKeys.has(key)) {
+            runtime.webhookCache.delete(key);
+        }
+    }
+
+    return runtime;
+}
+
+function getActiveState() {
+    if (runtime.dirty) {
+        rebuildState();
+    }
+    return runtime;
+}
+
+export function refresh() {
+    if (!runtime.config) {
+        return 0;
+    }
+    runtime.dirty = true;
+    const state = rebuildState();
+    if (runtime.logger) {
+        if (state.bridges.size) {
+            runtime.logger.info?.(`[rainbow-bridge] Refreshed ${state.bridges.size} bridge(s) spanning ${state.channelLookup.size} channels.`);
+        } else {
+            runtime.logger.info?.('[rainbow-bridge] Rainbow Bridge refresh: no bridges configured.');
+        }
+    }
+    return state.bridges.size;
 }
 
 function extractMedia(message) {
@@ -220,67 +334,28 @@ function prepareEditPayload({ message, bridgeId, bridge }) {
 }
 
 export async function init({ client, config, logger }) {
+    runtime.config = config;
+    runtime.logger = logger;
+    runtime.webhookCache = new Map();
+    runtime.messageLinks = new Map();
+    runtime.dirty = true;
+
     config.rainbowBridge = normalizeRainbowBridgeConfig(config.rainbowBridge);
-
-    const bridges = new Map();
-    const knownWebhookIds = new Set();
-    const webhookCache = new Map();
-
-    for (const [bridgeId, entry] of Object.entries(config.rainbowBridge?.bridges ?? {})) {
-        const normalized = {
-            id: bridgeId,
-            name: entry.name ?? bridgeId,
-            forwardBots: entry.forwardBots === undefined
-                ? config.rainbowBridge.forwardBots
-                : entry.forwardBots,
-            channels: []
-        };
-
-        for (const channelEntry of entry.channels) {
-            const parsed = parseWebhookUrl(channelEntry.webhookUrl);
-            if (!parsed) {
-                logger?.warn?.(`[rainbow-bridge] Skipping channel ${channelEntry.channelId} in bridge ${bridgeId}: invalid webhook URL.`);
-                continue;
-            }
-            normalized.channels.push({
-                guildId: channelEntry.guildId,
-                channelId: channelEntry.channelId,
-                webhookUrl: channelEntry.webhookUrl,
-                webhookId: parsed.id,
-                webhookToken: parsed.token,
-                name: channelEntry.name ?? null
-            });
-            knownWebhookIds.add(parsed.id);
-        }
-
-        if (normalized.channels.length >= 2) {
-            bridges.set(bridgeId, normalized);
-        } else if (normalized.channels.length > 0) {
-            logger?.warn?.(`[rainbow-bridge] Bridge ${bridgeId} ignored — it needs at least two linked channels.`);
-        }
-    }
-
-    if (!bridges.size) {
-        logger?.info?.('[rainbow-bridge] No bridges configured.');
-        return;
-    }
-
-    const channelLookup = buildChannelLookup(bridges);
-    const messageLinks = new Map(); // messageId -> Map(bridgeId -> { originChannelId, forwarded: Map(channelId -> messageId) })
+    rebuildState();
 
     function getWebhookClient(entry) {
         const key = `${entry.webhookId}:${entry.webhookToken}`;
-        if (!webhookCache.has(key)) {
-            webhookCache.set(key, new WebhookClient({ id: entry.webhookId, token: entry.webhookToken, allowedMentions: { parse: [] } }));
+        if (!runtime.webhookCache.has(key)) {
+            runtime.webhookCache.set(key, new WebhookClient({ id: entry.webhookId, token: entry.webhookToken, allowedMentions: { parse: [] } }));
         }
-        return webhookCache.get(key);
+        return runtime.webhookCache.get(key);
     }
 
     function cacheForwardedMessage({ originalId, bridgeId, originChannelId, targetChannelId, targetMessageId }) {
-        if (!messageLinks.has(originalId)) {
-            messageLinks.set(originalId, new Map());
+        if (!runtime.messageLinks.has(originalId)) {
+            runtime.messageLinks.set(originalId, new Map());
         }
-        const bridgeMap = messageLinks.get(originalId);
+        const bridgeMap = runtime.messageLinks.get(originalId);
         if (!bridgeMap.has(bridgeId)) {
             bridgeMap.set(bridgeId, { originChannelId, forwarded: new Map() });
         }
@@ -291,6 +366,9 @@ export async function init({ client, config, logger }) {
     async function handleMessageCreate(message) {
         try {
             if (!message.guild || !message.channel) return;
+
+            const { bridges, channelLookup, knownWebhookIds } = getActiveState();
+            if (!bridges.size) return;
             if (message.webhookId && knownWebhookIds.has(message.webhookId)) return;
 
             const bridgesForChannel = channelLookup.get(message.channel.id);
@@ -329,9 +407,10 @@ export async function init({ client, config, logger }) {
         try {
             const message = newMessage?.partial ? await newMessage.fetch().catch(() => null) : newMessage;
             if (!message) return;
-            if (!messageLinks.has(message.id)) return;
+            if (!runtime.messageLinks.has(message.id)) return;
 
-            const bridgeMap = messageLinks.get(message.id);
+            const { bridges } = getActiveState();
+            const bridgeMap = runtime.messageLinks.get(message.id);
             for (const [bridgeId, record] of bridgeMap.entries()) {
                 const bridge = bridges.get(bridgeId);
                 if (!bridge) continue;
@@ -356,15 +435,16 @@ export async function init({ client, config, logger }) {
 
     async function handleMessageDelete(message) {
         try {
+            const { knownWebhookIds, bridges } = getActiveState();
             if (message.webhookId && knownWebhookIds.has(message.webhookId)) {
                 return; // ignore deletions of mirrored messages to avoid loops
             }
             const messageId = message.id ?? message?.message?.id;
             if (!messageId) return;
-            if (!messageLinks.has(messageId)) return;
+            if (!runtime.messageLinks.has(messageId)) return;
 
-            const bridgeMap = messageLinks.get(messageId);
-            messageLinks.delete(messageId);
+            const bridgeMap = runtime.messageLinks.get(messageId);
+            runtime.messageLinks.delete(messageId);
 
             for (const [bridgeId, record] of bridgeMap.entries()) {
                 const bridge = bridges.get(bridgeId);
@@ -390,5 +470,10 @@ export async function init({ client, config, logger }) {
     client.on('messageUpdate', handleMessageUpdate);
     client.on('messageDelete', handleMessageDelete);
 
-    logger?.info?.(`[rainbow-bridge] Loaded ${bridges.size} bridge(s) spanning ${channelLookup.size} channels.`);
+    const { bridges, channelLookup } = getActiveState();
+    if (bridges.size) {
+        logger?.info?.(`[rainbow-bridge] Loaded ${bridges.size} bridge(s) spanning ${channelLookup.size} channels.`);
+    } else {
+        logger?.info?.('[rainbow-bridge] Rainbow Bridge ready — no bridges configured yet.');
+    }
 }
