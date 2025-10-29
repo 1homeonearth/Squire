@@ -124,12 +124,15 @@ async function buildWelcomeImage(member, logger) {
 }
 
 export function init({ client, logger, config }) {
-    const welcomeCfg = config?.welcome || {};
-    const mentionMap = welcomeCfg.mentions || {};
+    if (!config.welcome || typeof config.welcome !== 'object') {
+        config.welcome = {};
+    }
 
     client.on('guildMemberAdd', async (member) => {
         try {
             if (!member.guild) return;
+            const welcomeCfg = config?.welcome?.[member.guild.id] || {};
+            const mentionMap = welcomeCfg.mentions || {};
             const ch = await findWelcomeChannel(member.guild, welcomeCfg.channelId);
             if (!ch) return;
 
@@ -153,6 +156,7 @@ export function init({ client, logger, config }) {
     client.on('guildMemberRemove', async (member) => {
         try {
             if (!member.guild) return;
+            const welcomeCfg = config?.welcome?.[member.guild.id] || {};
             const ch = await findWelcomeChannel(member.guild, welcomeCfg.channelId);
             if (!ch) return;
             const name = member.displayName || member.user?.username || 'A member';
