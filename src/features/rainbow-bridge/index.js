@@ -6,6 +6,7 @@ import {
     EmbedBuilder
 } from 'discord.js';
 import { isYouTubeUrl, prepareForNativeEmbed } from '../../lib/youtube.js';
+import { formatPollLines } from '../../lib/poll-format.js';
 
 const RAINBOW = [0xFF0000, 0xFFA500, 0xFFFF00, 0x00FF00, 0x0000FF, 0x800080];
 
@@ -51,12 +52,16 @@ function normalizeChannelEntry(entry) {
     const guildId = entry.guildId ? String(entry.guildId) : null;
     const channelId = entry.channelId ? String(entry.channelId) : null;
     const webhookUrl = entry.webhookUrl ? String(entry.webhookUrl) : null;
+    const threadId = entry.threadId ? String(entry.threadId) : null;
+    const parentId = entry.parentId ? String(entry.parentId) : null;
     if (!guildId || !channelId || !webhookUrl) return null;
     if (!parseWebhookUrl(webhookUrl)) return null;
     return {
         guildId,
         channelId,
         webhookUrl,
+        threadId,
+        parentId,
         name: entry.name ? String(entry.name) : null
     };
 }
@@ -90,9 +95,12 @@ function buildChannelLookup(bridges) {
     const channelMap = new Map();
     for (const [bridgeId, bridge] of bridges.entries()) {
         for (const channelEntry of bridge.channels) {
-            const list = channelMap.get(channelEntry.channelId) ?? [];
-            list.push({ bridgeId, bridge, channelEntry });
-            channelMap.set(channelEntry.channelId, list);
+            const matchIds = channelEntry.matchIds ?? new Set([channelEntry.channelId]);
+            for (const matchId of matchIds) {
+                const list = channelMap.get(matchId) ?? [];
+                list.push({ bridgeId, bridge, channelEntry });
+                channelMap.set(matchId, list);
+            }
         }
     }
     return channelMap;
@@ -133,12 +141,20 @@ function rebuildState() {
                 continue;
             }
 
+            const matchIds = new Set();
+            if (channelEntry.channelId) matchIds.add(channelEntry.channelId);
+            if (channelEntry.threadId) matchIds.add(channelEntry.threadId);
+            if (channelEntry.parentId) matchIds.add(channelEntry.parentId);
+
             normalized.channels.push({
                 guildId: channelEntry.guildId,
                 channelId: channelEntry.channelId,
                 webhookUrl: channelEntry.webhookUrl,
                 webhookId: parsed.id,
                 webhookToken: parsed.token,
+                threadId: channelEntry.threadId ?? null,
+                parentId: channelEntry.parentId ?? null,
+                matchIds,
                 name: channelEntry.name ?? null
             });
 
@@ -216,10 +232,28 @@ function extractMedia(message) {
     return [...new Set(urls)];
 }
 
+function resolveChannelLabel(channel, fallbackId) {
+    if (!channel) {
+        return `#${fallbackId ?? 'unknown-channel'}`;
+    }
+
+    try {
+        const isThread = typeof channel.isThread === 'function' && channel.isThread();
+        if (isThread) {
+            const parentName = channel.parent?.name ?? channel.parentId ?? 'unknown-parent';
+            const threadName = channel.name ?? fallbackId ?? 'unknown-thread';
+            return `#${parentName} / #${threadName}`;
+        }
+    } catch {}
+
+    const channelName = channel.name ?? fallbackId ?? 'unknown-channel';
+    return `#${channelName}`;
+}
+
 function buildContextLine(message) {
     const guildName = message.guild?.name ?? message.guildId ?? 'Unknown server';
-    const channelName = message.channel?.name ?? message.channelId ?? 'unknown-channel';
-    return `**${guildName}** • #${channelName}`;
+    const channelLabel = resolveChannelLabel(message.channel, message.channelId);
+    return `**${guildName}** • ${channelLabel}`;
 }
 
 function buildContent(message, { sanitize = false } = {}) {
@@ -239,6 +273,12 @@ function buildContent(message, { sanitize = false } = {}) {
     if (message.stickers?.size) {
         const stickerLines = message.stickers.map((sticker) => `🃏 Sticker: ${sticker.name}`).join('\n');
         if (stickerLines) parts.push(stickerLines);
+    }
+
+    const pollLines = formatPollLines(message.poll);
+    if (pollLines.length) {
+        const block = pollLines.join('\n');
+        parts.push(sanitize ? prepareForNativeEmbed(block) : block);
     }
 
     let combined = parts.join('\n\n');
@@ -357,16 +397,69 @@ export async function init({ client, config, logger }) {
         return runtime.webhookCache.get(key);
     }
 
-    function cacheForwardedMessage({ originalId, bridgeId, originChannelId, targetChannelId, targetMessageId }) {
+    function cacheForwardedMessage({ originalId, bridgeId, originChannelId, originParentId, targetChannelId, targetMessageId, targetThreadId }) {
         if (!runtime.messageLinks.has(originalId)) {
             runtime.messageLinks.set(originalId, new Map());
         }
         const bridgeMap = runtime.messageLinks.get(originalId);
         if (!bridgeMap.has(bridgeId)) {
-            bridgeMap.set(bridgeId, { originChannelId, forwarded: new Map() });
+            bridgeMap.set(bridgeId, { originChannelId, originParentId: originParentId ?? null, forwarded: new Map() });
         }
         const record = bridgeMap.get(bridgeId);
-        record.forwarded.set(targetChannelId, targetMessageId);
+        if (originParentId && !record.originParentId) {
+            record.originParentId = originParentId;
+        }
+        const key = targetThreadId ?? targetChannelId;
+        record.forwarded.set(key, {
+            messageId: targetMessageId,
+            channelId: targetChannelId,
+            threadId: targetThreadId ?? null
+        });
+    }
+
+    function collectBridgeEntries(message, channelLookup) {
+        const ids = new Set();
+        const directId = message.channel?.id ?? message.channelId;
+        if (directId) ids.add(directId);
+        const parentId = message.channel?.parentId ?? message.channel?.parent?.id ?? null;
+        if (parentId) ids.add(parentId);
+        const results = [];
+        const seen = new Set();
+        for (const id of ids) {
+            if (!id) continue;
+            const entries = channelLookup.get(id);
+            if (!entries) continue;
+            for (const entry of entries) {
+                const key = `${entry.bridgeId}:${entry.channelEntry.channelId}`;
+                if (seen.has(key)) continue;
+                seen.add(key);
+                results.push(entry);
+            }
+        }
+        return results;
+    }
+
+    function getForwardedRecord(record, target) {
+        if (!record?.forwarded) return null;
+        const keys = [];
+        if (target.threadId) keys.push(target.threadId);
+        keys.push(target.channelId);
+        for (const key of keys) {
+            if (!key) continue;
+            if (!record.forwarded.has(key)) continue;
+            const value = record.forwarded.get(key);
+            if (!value) continue;
+            if (typeof value === 'string') {
+                return { messageId: value, channelId: key, threadId: target.threadId ?? null };
+            }
+            if (typeof value === 'object') {
+                const messageId = value.messageId ?? value.id ?? null;
+                const threadId = value.threadId ?? (target.threadId ?? null);
+                const channelId = value.channelId ?? key;
+                return { messageId, threadId, channelId };
+            }
+        }
+        return null;
     }
 
     async function handleMessageCreate(message) {
@@ -377,13 +470,24 @@ export async function init({ client, config, logger }) {
             if (!bridges.size) return;
             if (message.webhookId && knownWebhookIds.has(message.webhookId)) return;
 
-            const bridgesForChannel = channelLookup.get(message.channel.id);
+            const bridgesForChannel = collectBridgeEntries(message, channelLookup);
             if (!bridgesForChannel || !bridgesForChannel.length) return;
+
+            const originIds = new Set();
+            if (message.channel?.id) originIds.add(message.channel.id);
+            const parentId = message.channel?.parentId ?? message.channel?.parent?.id ?? null;
+            if (parentId) originIds.add(parentId);
 
             for (const { bridgeId, bridge } of bridgesForChannel) {
                 if (!bridge.forwardBots && message.author?.bot) continue;
 
-                const targets = bridge.channels.filter(ch => ch.channelId !== message.channel.id);
+                const targets = bridge.channels.filter((ch) => {
+                    const matchIds = ch.matchIds ?? new Set([ch.channelId]);
+                    for (const id of matchIds) {
+                        if (originIds.has(id)) return false;
+                    }
+                    return true;
+                });
                 if (!targets.length) continue;
 
                 const payload = prepareSendPayload({ message, bridgeId, bridge });
@@ -391,13 +495,18 @@ export async function init({ client, config, logger }) {
                 for (const target of targets) {
                     try {
                         const webhook = getWebhookClient(target);
-                        const sent = await webhook.send(payload);
+                        const sendPayload = target.threadId
+                            ? { ...payload, threadId: target.threadId }
+                            : payload;
+                        const sent = await webhook.send(sendPayload);
                         cacheForwardedMessage({
                             originalId: message.id,
                             bridgeId,
                             originChannelId: message.channel.id,
+                            originParentId: parentId ?? null,
                             targetChannelId: target.channelId,
-                            targetMessageId: sent?.id ?? null
+                            targetMessageId: sent?.id ?? null,
+                            targetThreadId: target.threadId ?? null
                         });
                     } catch (err) {
                         logger?.warn?.(`[rainbow-bridge] Failed to forward message ${message.id} to ${target.channelId}: ${err?.message ?? err}`);
@@ -420,15 +529,27 @@ export async function init({ client, config, logger }) {
             for (const [bridgeId, record] of bridgeMap.entries()) {
                 const bridge = bridges.get(bridgeId);
                 if (!bridge) continue;
-                const targets = bridge.channels.filter(ch => ch.channelId !== record.originChannelId);
+                const originIds = new Set();
+                if (record.originChannelId) originIds.add(record.originChannelId);
+                if (record.originParentId) originIds.add(record.originParentId);
+                const targets = bridge.channels.filter((ch) => {
+                    const matchIds = ch.matchIds ?? new Set([ch.channelId]);
+                    for (const id of matchIds) {
+                        if (originIds.has(id)) return false;
+                    }
+                    return true;
+                });
                 const payload = prepareEditPayload({ message, bridgeId, bridge });
 
                 for (const target of targets) {
-                    const targetMessageId = record.forwarded.get(target.channelId);
+                    const forwarded = getForwardedRecord(record, target);
+                    const targetMessageId = forwarded?.messageId ?? null;
                     if (!targetMessageId) continue;
+                    const threadId = forwarded?.threadId ?? target.threadId ?? null;
                     try {
                         const webhook = getWebhookClient(target);
-                        await webhook.editMessage(targetMessageId, payload);
+                        const editPayload = threadId ? { ...payload, threadId } : payload;
+                        await webhook.editMessage(targetMessageId, editPayload);
                     } catch (err) {
                         logger?.warn?.(`[rainbow-bridge] Failed to edit mirrored message ${targetMessageId} in ${target.channelId}: ${err?.message ?? err}`);
                     }
@@ -455,13 +576,28 @@ export async function init({ client, config, logger }) {
             for (const [bridgeId, record] of bridgeMap.entries()) {
                 const bridge = bridges.get(bridgeId);
                 if (!bridge) continue;
-                const targets = bridge.channels.filter(ch => ch.channelId !== record.originChannelId);
+                const originIds = new Set();
+                if (record.originChannelId) originIds.add(record.originChannelId);
+                if (record.originParentId) originIds.add(record.originParentId);
+                const targets = bridge.channels.filter((ch) => {
+                    const matchIds = ch.matchIds ?? new Set([ch.channelId]);
+                    for (const id of matchIds) {
+                        if (originIds.has(id)) return false;
+                    }
+                    return true;
+                });
                 for (const target of targets) {
-                    const targetMessageId = record.forwarded.get(target.channelId);
+                    const forwarded = getForwardedRecord(record, target);
+                    const targetMessageId = forwarded?.messageId ?? null;
                     if (!targetMessageId) continue;
+                    const threadId = forwarded?.threadId ?? target.threadId ?? null;
                     try {
                         const webhook = getWebhookClient(target);
-                        await webhook.deleteMessage(targetMessageId).catch(() => {});
+                        if (threadId) {
+                            await webhook.deleteMessage(targetMessageId, threadId).catch(() => {});
+                        } else {
+                            await webhook.deleteMessage(targetMessageId).catch(() => {});
+                        }
                     } catch (err) {
                         logger?.warn?.(`[rainbow-bridge] Failed to delete mirrored message ${targetMessageId} in ${target.channelId}: ${err?.message ?? err}`);
                     }
