@@ -1,0 +1,29 @@
+name: Deploy to MCS on PR merge or push to main
+
+on:
+  pull_request:
+    types: [closed]
+    branches: [main]
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+jobs:
+  deploy:
+    if: github.event_name != 'pull_request' || github.event.pull_request.merged == true
+    runs-on: ubuntu-latest
+    steps:
+      - name: Add MCS host key to known_hosts
+        run: |
+          mkdir -p ~/.ssh
+          ssh-keyscan -p "${{ secrets.MCS_PORT }}" "${{ secrets.MCS_HOST }}" >> ~/.ssh/known_hosts
+
+      - name: Deploy via SSH
+        uses: appleboy/ssh-action@v1.1.0
+        with:
+          host:     ${{ secrets.MCS_HOST }}
+          port:     ${{ secrets.MCS_PORT }}
+          username: ${{ secrets.MCS_USER }}
+          key:      ${{ secrets.MCS_SSH_PRIVATE_KEY }}
+          script: |
+            squirectl deploy

@@ -1,0 +1,48 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+APP_DIR="/opt/squire/app"
+UNIT="${UNIT:-squire.service}"
+NODE_ENV="${NODE_ENV:-production}"
+
+run_as_squire() {
+  runuser -u squire -- bash -lc "$*"
+}
+
+git_safe_dir_fix() {
+  git -C "$APP_DIR" config --global --add safe.directory "$APP_DIR" || true
+  run_as_squire "git -C '$APP_DIR' config --global --add safe.directory '$APP_DIR' || true"
+}
+
+render_config() {
+  # Ensure sample exists; if config.json is missing, create a stub to merge
+  run_as_squire "cd '$APP_DIR' && [ -f config.sample.json ] || { echo 'config.sample.json missing' >&2; exit 1; }"
+  run_as_squire "cd '$APP_DIR' && [ -f config.json ] || cp config.sample.json config.json"
+
+  # Use repo script to render from env → config.rendered.json, then atomically replace
+  run_as_squire "cd '$APP_DIR' && NODE_ENV='$NODE_ENV' node ./scripts/render-config.mjs"
+}
+
+install_prod() {
+  run_as_squire "cd '$APP_DIR' && NODE_ENV='$NODE_ENV' npm ci --omit=dev"
+}
+
+deploy_code() {
+  git_safe_dir_fix
+  run_as_squire "git -C '$APP_DIR' fetch --all --prune"
+  run_as_squire "git -C '$APP_DIR' reset --hard origin/main"
+}
+
+cmd_deploy()  { deploy_code; install_prod; render_config; systemctl restart "$UNIT"; systemctl --no-pager status "$UNIT" --lines=20; }
+cmd_start()   { deploy_code; install_prod; render_config; systemctl start   "$UNIT"; systemctl --no-pager status "$UNIT" --lines=20; }
+cmd_restart() { deploy_code; install_prod; render_config; systemctl restart "$UNIT"; systemctl --no-pager status "$UNIT" --lines=20; }
+cmd_status()  { systemctl --no-pager status "$UNIT" --lines=50; journalctl -u "$UNIT" --no-pager -n 200 || true; }
+
+usage() { echo "Usage: $0 {deploy|start|restart|status}"; exit 2; }
+case "${1:-}" in
+  deploy) shift; cmd_deploy   "$@";;
+  start)  shift; cmd_start    "$@";;
+  restart)shift; cmd_restart  "$@";;
+  status) shift; cmd_status   "$@";;
+  *) usage ;;
+esac

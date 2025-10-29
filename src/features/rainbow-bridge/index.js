@@ -5,6 +5,7 @@ import {
     WebhookClient,
     EmbedBuilder
 } from 'discord.js';
+import { isYouTubeUrl, prepareForNativeEmbed } from '../../lib/youtube.js';
 
 const RAINBOW = [0xFF0000, 0xFFA500, 0xFFFF00, 0x00FF00, 0x0000FF, 0x800080];
 
@@ -101,9 +102,17 @@ function extractMedia(message) {
     return [...new Set(urls)];
 }
 
-function buildContent(message) {
+function buildContextLine(message) {
+    const guildName = message.guild?.name ?? message.guildId ?? 'Unknown server';
+    const channelName = message.channel?.name ?? message.channelId ?? 'unknown-channel';
+    return `**${guildName}** • #${channelName}`;
+}
+
+function buildContent(message, { sanitize = false } = {}) {
     const parts = [];
-    if (message.content?.length) parts.push(message.content);
+    if (message.content?.length) {
+        parts.push(sanitize ? prepareForNativeEmbed(message.content) : message.content);
+    }
 
     const attachmentUrls = Array.from(message.attachments?.values?.() ?? [])
         .map(att => att?.url)
@@ -118,7 +127,10 @@ function buildContent(message) {
         if (stickerLines) parts.push(stickerLines);
     }
 
-    const combined = parts.join('\n\n');
+    let combined = parts.join('\n\n');
+    if (sanitize) {
+        combined = prepareForNativeEmbed(combined);
+    }
     return combined.length > MAX_CONTENT_LENGTH
         ? trunc(combined, MAX_CONTENT_LENGTH)
         : combined;
@@ -133,9 +145,8 @@ function buildEmbed({ bridgeId, bridge, message }) {
         text: `Bridge: ${bridge.name ?? bridgeId}`.slice(0, 2048)
     });
 
-    const guildName = message.guild?.name ?? message.guildId ?? 'Unknown server';
-    const channelName = message.channel?.name ?? message.channelId ?? 'unknown-channel';
-    embed.setDescription(`**${guildName}** • #${channelName}`.slice(0, 4096));
+    const contextLine = buildContextLine(message);
+    embed.setDescription(contextLine.slice(0, 4096));
 
     const media = extractMedia(message);
     if (media.length) {
@@ -157,33 +168,53 @@ function resolveAvatar(message) {
 }
 
 function prepareSendPayload({ message, bridgeId, bridge }) {
-    const content = buildContent(message);
+    const hasYouTube = isYouTubeUrl(message.content ?? '');
+    const content = buildContent(message, { sanitize: hasYouTube });
     const embed = buildEmbed({ bridgeId, bridge, message });
+    const contextLine = buildContextLine(message);
     const payload = {
         username: resolveUsername(message),
         avatarURL: resolveAvatar(message),
-        embeds: [embed],
         allowedMentions: { parse: [] }
     };
 
-    if (content.length) {
-        payload.content = content;
+    if (hasYouTube) {
+        const messageBody = content.trim();
+        const combined = [contextLine, messageBody].filter(Boolean).join('\n\n').trim();
+        if (combined.length) {
+            payload.content = combined;
+        }
+        payload.embeds = [];
+    } else {
+        if (content.length) {
+            payload.content = content;
+        }
+        payload.embeds = [embed];
     }
 
     return payload;
 }
 
 function prepareEditPayload({ message, bridgeId, bridge }) {
-    const content = buildContent(message);
+    const hasYouTube = isYouTubeUrl(message.content ?? '');
+    const content = buildContent(message, { sanitize: hasYouTube });
     const embed = buildEmbed({ bridgeId, bridge, message });
+    const contextLine = buildContextLine(message);
     const payload = {
-        embeds: [embed],
         allowedMentions: { parse: [] }
     };
-    if (content.length) {
-        payload.content = content;
+    if (hasYouTube) {
+        const messageBody = content.trim();
+        const combined = [contextLine, messageBody].filter(Boolean).join('\n\n').trim();
+        payload.content = combined.length ? combined : '';
+        payload.embeds = [];
     } else {
-        payload.content = '';
+        payload.embeds = [embed];
+        if (content.length) {
+            payload.content = content;
+        } else {
+            payload.content = '';
+        }
     }
     return payload;
 }

@@ -1,6 +1,6 @@
 {
-  "token": "DISCORD_TOKEN",
-  "applicationId": "1431956562246762577",
+  "token": "$ENV{DISCORD_TOKEN}",
+  "applicationId": "$ENV{DISCORD_APPLICATION_ID}",
   "dbPath": "./squire.db.json",
   "sampleRate": 1.0,
   "forwardBots": true,
@@ -14,8 +14,8 @@
     "welcome-cards"
   ],
   "mapping": {
-    "1129906023084343346": "https://discord.com/api/webhooks/xxx/yyy",
-    "1391983429553492049": "https://discord.com/api/webhooks/aaa/bbb"
+    "1129906023084343346": "$ENV{WEBHOOK_SERVER_1129906023084343346}",
+    "1391983429553492049": "$ENV{WEBHOOK_SERVER_1391983429553492049}"
   },
   "loggingChannels": {
     "messages": "123456789012345678",
@@ -59,12 +59,12 @@
           {
             "guildId": "1129906023084343346",
             "channelId": "999999999999999999",
-            "webhookUrl": "https://discord.com/api/webhooks/example/main-one"
+            "webhookUrl": "$ENV{RAINBOW_BRIDGE_MAIN_ONE_WEBHOOK}"
           },
           {
             "guildId": "1391983429553492049",
             "channelId": "111111111111111111",
-            "webhookUrl": "https://discord.com/api/webhooks/example/main-two"
+            "webhookUrl": "$ENV{RAINBOW_BRIDGE_MAIN_TWO_WEBHOOK}"
           }
         ]
       }
@@ -76,7 +76,7 @@
     "verifiedRoleIds": ["123456789012345678"],
     "notifyChannelId": "987654321098765432",
     "notifyWebhookUrls": [
-      "https://discord.com/api/webhooks/ccc/ddd"
+      "$ENV{AUTOBAN_NOTIFY_WEBHOOK}"
     ],
     "deleteMessageSeconds": 0
   },
