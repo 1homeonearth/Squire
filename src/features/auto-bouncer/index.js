@@ -44,10 +44,28 @@ async function resolveLogChannel(guild, channelId) {
     return null;
 }
 
+function timestampContent(message) {
+    const unix = Math.floor(Date.now() / 1000);
+    const tsTag = `<t:${unix}:f>`;
+    if (typeof message === 'string') {
+        return `🕒 ${tsTag} • ${message}`;
+    }
+    if (message && typeof message === 'object') {
+        const clone = { ...message };
+        if (typeof clone.content === 'string' && clone.content.trim().length) {
+            clone.content = `🕒 ${tsTag} • ${clone.content}`;
+        } else {
+            clone.content = `🕒 ${tsTag}`;
+        }
+        return clone;
+    }
+    return `🕒 ${tsTag} • ${String(message ?? '')}`;
+}
+
 async function safeNotify(channel, message, logger) {
     if (!channel) return;
     try {
-        await channel.send(message);
+        await channel.send(timestampContent(message));
     } catch (err) {
         logger?.warn?.(`[autoban] Failed to notify in ${channel.id}: ${err?.message ?? err}`);
     }
@@ -59,7 +77,8 @@ async function safeWebhookNotify(urls, message, logger) {
         if (!url) return;
         try {
             const client = new WebhookClient({ url });
-            await client.send({ content: message });
+            const payload = timestampContent({ content: typeof message === 'string' ? message : message?.content });
+            await client.send(typeof payload === 'string' ? { content: payload } : payload);
             client.destroy?.();
         } catch (err) {
             logger?.warn?.(`[autoban] Failed to notify webhook ${truncateWebhook(url)}: ${err?.message ?? err}`);

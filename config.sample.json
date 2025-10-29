@@ -10,6 +10,7 @@
     "setup",
     "auto-bouncer",
     "logging-forwarder",
+    "rainbow-bridge",
     "welcome-cards"
   ],
   "mapping": {
@@ -48,6 +49,26 @@
     "1413887559695597740": [
       "1413888221246652556"
     ]
+  },
+  "rainbowBridge": {
+    "forwardBots": true,
+    "bridges": {
+      "main-halls": {
+        "name": "Main Halls",
+        "channels": [
+          {
+            "guildId": "1129906023084343346",
+            "channelId": "999999999999999999",
+            "webhookUrl": "https://discord.com/api/webhooks/example/main-one"
+          },
+          {
+            "guildId": "1391983429553492049",
+            "channelId": "111111111111111111",
+            "webhookUrl": "https://discord.com/api/webhooks/example/main-two"
+          }
+        ]
+      }
+    }
   },
   "autoban": {
     "enabled": true,

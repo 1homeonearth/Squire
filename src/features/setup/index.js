@@ -14,6 +14,7 @@ import {
 } from 'discord.js';
 
 import { writeConfig } from '../../core/config.js';
+import { normalizeRainbowBridgeConfig } from '../rainbow-bridge/index.js';
 
 const LOGGING_CHANNEL_CATEGORIES = [
     { key: 'messages', label: 'Message logs', description: 'Cross-server message forwards.' },
@@ -103,6 +104,11 @@ export function init({ client, config, logger }) {
                 await handleAutobouncerInteraction({ interaction, entry, config, key, logger, client });
                 return;
             }
+
+            if (module === 'rainbow') {
+                await handleRainbowBridgeInteraction({ interaction, entry, config, key, client, logger });
+                return;
+            }
         } catch (err) {
             logger?.error?.(`[setup] Interaction error: ${err?.message ?? err}`);
             try {
@@ -153,6 +159,8 @@ function ensureConfigShape(config) {
     if (typeof config.sampleRate !== 'number' || Number.isNaN(config.sampleRate)) {
         config.sampleRate = 1;
     }
+
+    config.rainbowBridge = normalizeRainbowBridgeConfig(config.rainbowBridge);
 }
 
 function sanitizeIdArray(value) {
@@ -326,6 +334,15 @@ async function buildHomeView({ client, config, guildOptions }) {
             name: 'Autobouncer notifications',
             value: autobanChannelDisplay,
             inline: false
+        },
+        {
+            name: 'Rainbow Bridge',
+            value: (() => {
+                const count = Object.keys(config.rainbowBridge?.bridges ?? {}).length;
+                if (!count) return 'No bridges configured yet.';
+                return `${count} bridge${count === 1 ? '' : 's'} configured.`;
+            })(),
+            inline: false
         }
     );
 
@@ -403,6 +420,7 @@ async function buildHomeView({ client, config, guildOptions }) {
     .addOptions(
         { label: 'Logging', value: 'logging', description: 'Configure webhooks and exclusions.' },
         { label: 'Welcome cards', value: 'welcome', description: 'Choose welcome, rules, roles, and verify channels.' },
+        { label: 'Rainbow Bridge', value: 'rainbow', description: 'Link channels together for two-way sync.' },
         { label: 'Autobouncer', value: 'autobouncer', description: 'Manage autoban keywords and notification channel.' }
     );
     components.push(new ActionRowBuilder().addComponents(moduleMenu));
@@ -513,6 +531,25 @@ async function handleHomeInteraction({ interaction, config, client, logger, home
                 availableGuildIds: available
             });
             panelStore.set(homeKey, { message, guildOptions, view: 'module', module: 'welcome' });
+            return;
+        }
+
+        if (target === 'rainbow') {
+            const view = await buildRainbowBridgeView({
+                config,
+                client,
+                guildOptions,
+                mode: 'default',
+                context: {}
+            });
+            const message = await interaction.update(view);
+            panelStore.set(moduleKey, {
+                message,
+                guildOptions,
+                mode: 'default',
+                context: {}
+            });
+            panelStore.set(homeKey, { message, guildOptions, view: 'module', module: 'rainbow' });
             return;
         }
 
@@ -1089,6 +1126,20 @@ function truncateName(name, max) {
     return value.length > max ? `${value.slice(0, max - 1)}…` : value;
 }
 
+function sanitizeBridgeId(value) {
+    if (!value) return null;
+    const cleaned = String(value).trim().toLowerCase().replace(/\s+/g, '-');
+    const safe = cleaned.replace(/[^a-z0-9_-]/g, '-').replace(/-+/g, '-').replace(/^[-_]+|[-_]+$/g, '');
+    if (!safe) return null;
+    return safe.slice(0, 48);
+}
+
+function isValidWebhookUrl(url) {
+    if (typeof url !== 'string') return false;
+    const trimmed = url.trim();
+    return /^https?:\/\/(?:\w+\.)?discord\.com\/api\/webhooks\/\d+\/[A-Za-z0-9._-]+$/i.test(trimmed);
+}
+
 function formatChannel(guild, channelId) {
     if (!channelId) return 'Not configured';
     const channel = guild?.channels?.cache?.get?.(channelId);
@@ -1351,6 +1402,542 @@ async function buildWelcomeView({ config, client, guild, mode, context }) {
 function mentionToDisplay(guild, channelId) {
     if (!channelId) return 'Not configured';
     return formatChannel(guild, channelId);
+}
+
+async function handleRainbowBridgeInteraction({ interaction, entry, config, key, client, logger }) {
+    const guildOptions = entry?.guildOptions ?? await collectManageableGuilds({ client, userId: interaction.user.id });
+    const bridges = config.rainbowBridge?.bridges ?? {};
+
+    const updateView = async (mode, context) => {
+        const view = await buildRainbowBridgeView({ config, client, guildOptions, mode, context });
+        const message = await interaction.update(view);
+        panelStore.set(key, { message, guildOptions, mode, context });
+    };
+
+    const setStateOnly = (mode, context) => {
+        panelStore.set(key, {
+            message: entry?.message ?? null,
+            guildOptions,
+            mode,
+            context
+        });
+    };
+
+    if (interaction.isButton()) {
+        const parts = interaction.customId.split(':');
+        const action = parts[2];
+        const bridgeId = parts[3] || null;
+
+        switch (action) {
+            case 'createBridge': {
+                const modal = new ModalBuilder()
+                .setCustomId('setup:rainbow:createBridgeModal')
+                .setTitle('Create a new bridge')
+                .addComponents(
+                    new ActionRowBuilder().addComponents(
+                        new TextInputBuilder()
+                        .setCustomId('setup:rainbow:bridgeId')
+                        .setLabel('Bridge ID (letters, numbers, - or _)')
+                        .setStyle(TextInputStyle.Short)
+                        .setRequired(true)
+                    ),
+                    new ActionRowBuilder().addComponents(
+                        new TextInputBuilder()
+                        .setCustomId('setup:rainbow:bridgeName')
+                        .setLabel('Display name (optional)')
+                        .setStyle(TextInputStyle.Short)
+                        .setRequired(false)
+                    )
+                );
+                setStateOnly(entry?.mode ?? 'default', entry?.context ?? {});
+                await interaction.showModal(modal);
+                return;
+            }
+            case 'refresh': {
+                await updateView('default', {});
+                return;
+            }
+            case 'addChannel': {
+                if (!bridgeId || !bridges[bridgeId]) {
+                    await interaction.reply({ content: 'That bridge no longer exists.', ephemeral: true });
+                    return;
+                }
+                await updateView('manage', { bridgeId, action: 'add', stage: 'pick-guild' });
+                return;
+            }
+            case 'removeChannel': {
+                if (!bridgeId || !bridges[bridgeId]) {
+                    await interaction.reply({ content: 'That bridge no longer exists.', ephemeral: true });
+                    return;
+                }
+                if (!bridges[bridgeId].channels?.length) {
+                    await interaction.reply({ content: 'This bridge has no channels yet.', ephemeral: true });
+                    return;
+                }
+                await updateView('manage', { bridgeId, action: 'remove' });
+                return;
+            }
+            case 'toggleBots': {
+                if (!bridgeId || !bridges[bridgeId]) {
+                    await interaction.reply({ content: 'That bridge no longer exists.', ephemeral: true });
+                    return;
+                }
+                const inherited = config.rainbowBridge.forwardBots !== false;
+                const current = bridges[bridgeId].forwardBots === undefined
+                    ? inherited
+                    : bridges[bridgeId].forwardBots;
+                const next = !current;
+                bridges[bridgeId].forwardBots = next;
+                config.rainbowBridge = normalizeRainbowBridgeConfig(config.rainbowBridge);
+                saveConfig(config, logger);
+                await updateView('manage', { bridgeId });
+                await interaction.followUp({
+                    content: next
+                        ? 'Bot messages will now be mirrored for this bridge.'
+                        : 'Bot messages will no longer be mirrored for this bridge.',
+                    ephemeral: true
+                }).catch(() => {});
+                return;
+            }
+            case 'deleteBridge': {
+                if (!bridgeId || !bridges[bridgeId]) {
+                    await interaction.reply({ content: 'That bridge no longer exists.', ephemeral: true });
+                    return;
+                }
+                await updateView('manage', { bridgeId, action: 'confirm-delete' });
+                return;
+            }
+            case 'confirmDelete': {
+                if (!bridgeId || !bridges[bridgeId]) {
+                    await interaction.reply({ content: 'That bridge no longer exists.', ephemeral: true });
+                    return;
+                }
+                const name = bridges[bridgeId].name ?? bridgeId;
+                delete bridges[bridgeId];
+                config.rainbowBridge = normalizeRainbowBridgeConfig(config.rainbowBridge);
+                saveConfig(config, logger);
+                await updateView('default', {});
+                await interaction.followUp({ content: `Bridge **${name}** deleted.`, ephemeral: true }).catch(() => {});
+                return;
+            }
+            case 'cancelDelete': {
+                if (!bridgeId) {
+                    await updateView('default', {});
+                    return;
+                }
+                await updateView('manage', { bridgeId });
+                return;
+            }
+            case 'backToList': {
+                await updateView('default', {});
+                return;
+            }
+            default:
+                return;
+        }
+    }
+
+    if (interaction.isStringSelectMenu()) {
+        const parts = interaction.customId.split(':');
+        const action = parts[2];
+
+        if (action === 'selectBridge') {
+            const choice = interaction.values?.[0] ?? null;
+            if (!choice || choice === 'noop') {
+                await updateView('default', {});
+                return;
+            }
+            if (!bridges[choice]) {
+                await interaction.reply({ content: 'That bridge no longer exists.', ephemeral: true });
+                return;
+            }
+            await updateView('manage', { bridgeId: choice });
+            return;
+        }
+
+        if (action === 'pickGuild') {
+            const bridgeId = parts[3] || null;
+            if (!bridgeId || !bridges[bridgeId]) {
+                await interaction.reply({ content: 'That bridge no longer exists.', ephemeral: true });
+                return;
+            }
+            const choice = interaction.values?.[0] ?? null;
+            if (!choice || choice === 'noop') {
+                await updateView('manage', { bridgeId, action: 'add', stage: 'pick-guild' });
+                return;
+            }
+            await updateView('manage', { bridgeId, action: 'add', stage: 'pick-channel', selectedGuildId: choice });
+            return;
+        }
+
+        if (action === 'pickChannel') {
+            const bridgeId = parts[3] || null;
+            if (!bridgeId || !bridges[bridgeId]) {
+                await interaction.reply({ content: 'That bridge no longer exists.', ephemeral: true });
+                return;
+            }
+            const channelId = interaction.values?.[0] ?? null;
+            const context = entry?.context ?? {};
+            const guildId = context?.selectedGuildId ?? null;
+            if (!guildId || !channelId) {
+                await updateView('manage', { bridgeId });
+                return;
+            }
+            const bridge = bridges[bridgeId];
+            if (bridge.channels?.some(ch => ch.channelId === channelId)) {
+                await interaction.reply({ content: 'That channel is already part of this bridge.', ephemeral: true });
+                return;
+            }
+            const guild = await fetchGuild(client, guildId);
+            if (!guild) {
+                await interaction.reply({ content: 'I could not access that server. Make sure I am in it.', ephemeral: true });
+                return;
+            }
+            let channel = guild.channels?.cache?.get(channelId) ?? null;
+            if (!channel && typeof guild.channels?.fetch === 'function') {
+                channel = await guild.channels.fetch(channelId).catch(() => null);
+            }
+            if (!channel || typeof channel.isTextBased !== 'function' || !channel.isTextBased() || channel.isThread?.()) {
+                await interaction.reply({ content: 'That channel is not a standard text channel.', ephemeral: true });
+                return;
+            }
+
+            try {
+                const desiredName = `Rainbow Bridge • ${truncateName(guild.name ?? guildId, 32)}`;
+                const webhook = await channel.createWebhook({
+                    name: desiredName,
+                    reason: 'Configured via /setup rainbow bridge'
+                });
+                const webhookUrl = `https://discord.com/api/webhooks/${webhook.id}/${webhook.token}`;
+                bridge.channels = Array.isArray(bridge.channels) ? bridge.channels : [];
+                bridge.channels.push({ guildId, channelId, webhookUrl });
+                config.rainbowBridge = normalizeRainbowBridgeConfig(config.rainbowBridge);
+                saveConfig(config, logger);
+                await updateView('manage', { bridgeId });
+                await interaction.followUp({
+                    content: `Linked <#${channelId}> from **${guild.name ?? guildId}** to **${bridge.name ?? bridgeId}**.`,
+                    ephemeral: true
+                }).catch(() => {});
+            } catch (err) {
+                logger?.warn?.(`[setup] Failed to create webhook for bridge ${bridgeId} in channel ${channelId}: ${err?.message ?? err}`);
+                const modal = new ModalBuilder()
+                .setCustomId(`setup:rainbow:webhookModal:${bridgeId}`)
+                .setTitle('Paste existing webhook URL')
+                .addComponents(
+                    new ActionRowBuilder().addComponents(
+                        new TextInputBuilder()
+                        .setCustomId('setup:rainbow:webhookUrl')
+                        .setLabel('Webhook URL')
+                        .setPlaceholder('https://discord.com/api/webhooks/...')
+                        .setStyle(TextInputStyle.Short)
+                        .setRequired(true)
+                    )
+                );
+                setStateOnly('manage', { bridgeId, action: 'add', stage: 'manual-webhook', selectedGuildId: guildId, pendingChannelId: channelId });
+                await interaction.showModal(modal);
+            }
+            return;
+        }
+
+        if (action === 'removeChannelSelect') {
+            const bridgeId = parts[3] || null;
+            if (!bridgeId || !bridges[bridgeId]) {
+                await interaction.reply({ content: 'That bridge no longer exists.', ephemeral: true });
+                return;
+            }
+            const selections = (interaction.values ?? []).map(String);
+            if (!selections.length) {
+                await updateView('manage', { bridgeId });
+                return;
+            }
+            const before = bridges[bridgeId].channels?.length ?? 0;
+            bridges[bridgeId].channels = (bridges[bridgeId].channels || []).filter((channel) => {
+                const key = `${channel.guildId}:${channel.channelId}`;
+                return !selections.includes(key);
+            });
+            const removed = before - (bridges[bridgeId].channels?.length ?? 0);
+            config.rainbowBridge = normalizeRainbowBridgeConfig(config.rainbowBridge);
+            saveConfig(config, logger);
+            await updateView('manage', { bridgeId });
+            await interaction.followUp({ content: `Removed ${removed} channel${removed === 1 ? '' : 's'} from this bridge.`, ephemeral: true }).catch(() => {});
+            return;
+        }
+
+        return;
+    }
+
+    if (interaction.isModalSubmit()) {
+        if (interaction.customId === 'setup:rainbow:createBridgeModal') {
+            const rawId = interaction.fields.getTextInputValue('setup:rainbow:bridgeId')?.trim();
+            const rawName = interaction.fields.getTextInputValue('setup:rainbow:bridgeName')?.trim();
+            const bridgeId = sanitizeBridgeId(rawId);
+            if (!bridgeId) {
+                await interaction.reply({ content: 'Bridge ID must contain only letters, numbers, hyphens, or underscores.', ephemeral: true });
+                return;
+            }
+            if (bridges[bridgeId]) {
+                await interaction.reply({ content: 'A bridge with that ID already exists.', ephemeral: true });
+                return;
+            }
+            const displayName = rawName?.length ? rawName : (rawId?.length ? rawId : bridgeId);
+            config.rainbowBridge.bridges = config.rainbowBridge.bridges || {};
+            config.rainbowBridge.bridges[bridgeId] = { name: displayName, channels: [] };
+            config.rainbowBridge = normalizeRainbowBridgeConfig(config.rainbowBridge);
+            saveConfig(config, logger);
+            await interaction.reply({ content: `Bridge **${displayName}** created. Add at least two channels to activate it.`, ephemeral: true });
+            if (entry?.message) {
+                try {
+                    const view = await buildRainbowBridgeView({ config, client, guildOptions, mode: 'manage', context: { bridgeId } });
+                    const message = await entry.message.edit(view);
+                    panelStore.set(key, { message, guildOptions, mode: 'manage', context: { bridgeId } });
+                } catch {}
+            }
+            return;
+        }
+
+        if (interaction.customId.startsWith('setup:rainbow:webhookModal:')) {
+            const parts = interaction.customId.split(':');
+            const bridgeId = parts[3] || null;
+            if (!bridgeId || !bridges[bridgeId]) {
+                await interaction.reply({ content: 'That bridge no longer exists.', ephemeral: true });
+                return;
+            }
+            const url = interaction.fields.getTextInputValue('setup:rainbow:webhookUrl')?.trim();
+            if (!isValidWebhookUrl(url)) {
+                await interaction.reply({ content: 'That does not look like a valid Discord webhook URL.', ephemeral: true });
+                return;
+            }
+            const context = entry?.context ?? {};
+            const guildId = context.selectedGuildId ?? context.pendingGuildId ?? null;
+            const channelId = context.pendingChannelId ?? null;
+            if (!guildId || !channelId) {
+                await interaction.reply({ content: 'Channel selection expired. Please try adding the channel again.', ephemeral: true });
+                return;
+            }
+            const bridge = bridges[bridgeId];
+            if (bridge.channels?.some(ch => ch.channelId === channelId)) {
+                await interaction.reply({ content: 'That channel is already part of this bridge.', ephemeral: true });
+                return;
+            }
+            bridge.channels = Array.isArray(bridge.channels) ? bridge.channels : [];
+            bridge.channels.push({ guildId, channelId, webhookUrl: url });
+            config.rainbowBridge = normalizeRainbowBridgeConfig(config.rainbowBridge);
+            saveConfig(config, logger);
+            await interaction.reply({ content: 'Webhook linked successfully.', ephemeral: true });
+            if (entry?.message) {
+                try {
+                    const view = await buildRainbowBridgeView({ config, client, guildOptions, mode: 'manage', context: { bridgeId } });
+                    const message = await entry.message.edit(view);
+                    panelStore.set(key, { message, guildOptions, mode: 'manage', context: { bridgeId } });
+                } catch {}
+            }
+            return;
+        }
+    }
+}
+
+async function buildRainbowBridgeView({ config, client, guildOptions, mode, context }) {
+    const embed = new EmbedBuilder()
+    .setTitle('🌈 Rainbow Bridge setup')
+    .setDescription('Synchronize messages, edits, and deletions across channels in different servers.');
+
+    const components = [];
+    const bridges = config.rainbowBridge?.bridges ?? {};
+    const bridgeEntries = Object.entries(bridges);
+    const guildOptionList = Array.isArray(guildOptions) ? guildOptions : [];
+
+    if (mode === 'default') {
+        const summary = bridgeEntries.length
+            ? bridgeEntries.map(([id, entry]) => {
+                const count = entry.channels?.length ?? 0;
+                return `• **${truncateName(entry.name ?? id, 60)}** (\`${id}\`) — ${count} channel${count === 1 ? '' : 's'}`;
+            }).join('\n')
+            : 'No bridges configured yet. Create one to begin linking channels.';
+
+        embed.addFields({ name: 'Configured bridges', value: summary.slice(0, 1024), inline: false });
+
+        const select = new StringSelectMenuBuilder()
+        .setCustomId('setup:rainbow:selectBridge')
+        .setPlaceholder(bridgeEntries.length ? 'Select a bridge to manage…' : 'Create a bridge to begin')
+        .setMinValues(1)
+        .setMaxValues(1)
+        .setDisabled(!bridgeEntries.length);
+
+        if (bridgeEntries.length) {
+            select.addOptions(bridgeEntries.slice(0, 25).map(([id, entry]) => ({
+                label: truncateName(entry.name ?? id, 100),
+                description: `${entry.channels?.length ?? 0} linked channel${(entry.channels?.length ?? 0) === 1 ? '' : 's'}`.slice(0, 100),
+                value: id
+            })));
+        } else {
+            select.addOptions({ label: 'No bridges available', value: 'noop', default: true });
+        }
+
+        components.push(new ActionRowBuilder().addComponents(select));
+
+        components.push(new ActionRowBuilder().addComponents(
+            new ButtonBuilder().setCustomId('setup:rainbow:createBridge').setLabel('Create bridge').setStyle(ButtonStyle.Primary),
+            new ButtonBuilder().setCustomId('setup:rainbow:refresh').setLabel('Refresh').setStyle(ButtonStyle.Secondary)
+        ));
+
+        appendHomeButtonRow(components);
+        return { embeds: [embed], components };
+    }
+
+    if (mode === 'manage') {
+        const bridgeId = context?.bridgeId ?? null;
+        const bridge = bridgeId ? bridges[bridgeId] : null;
+        if (!bridge) {
+            embed.addFields({ name: 'Status', value: 'The selected bridge could not be found. Return to the list and choose another.', inline: false });
+            components.push(new ActionRowBuilder().addComponents(
+                new ButtonBuilder().setCustomId('setup:rainbow:backToList').setLabel('Back to bridges').setStyle(ButtonStyle.Secondary)
+            ));
+            appendHomeButtonRow(components);
+            return { embeds: [embed], components };
+        }
+
+        const inherited = config.rainbowBridge.forwardBots !== false;
+        const bots = bridge.forwardBots === undefined ? inherited : bridge.forwardBots;
+
+        embed
+        .setTitle(`🌈 Bridge: ${bridge.name ?? bridgeId}`)
+        .addFields(
+            { name: 'Bridge ID', value: `\`${bridgeId}\``, inline: true },
+            { name: 'Bot messages', value: bots ? '✅ Mirrored' : '🚫 Ignored', inline: true }
+        );
+
+        const channelLines = [];
+        const guildCache = new Map();
+        for (const link of bridge.channels ?? []) {
+            if (!guildCache.has(link.guildId)) {
+                const fetched = await fetchGuild(client, link.guildId);
+                guildCache.set(link.guildId, fetched);
+            }
+            const guild = guildCache.get(link.guildId);
+            const guildName = guild?.name ?? link.guildId;
+            let channelDisplay = `<#${link.channelId}>`;
+            const channel = guild?.channels?.cache?.get(link.channelId) ?? null;
+            if (channel?.isTextBased?.()) {
+                channelDisplay = `<#${channel.id}>`;
+            }
+            channelLines.push(`• ${guildName} — ${channelDisplay}`);
+        }
+
+        embed.addFields({
+            name: 'Linked channels',
+            value: channelLines.length
+                ? channelLines.join('\n').slice(0, 1024)
+                : 'No channels linked yet. Add at least two channels to activate syncing.',
+            inline: false
+        });
+
+        if ((bridge.channels?.length ?? 0) < 2) {
+            embed.addFields({ name: 'Status', value: 'Add at least two channels so messages can be mirrored between them.', inline: false });
+        }
+
+        if (context?.action === 'add') {
+            if (context.stage === 'pick-guild') {
+                embed.setFooter({ text: 'Select the server that hosts the channel you want to add.' });
+            } else if (context.stage === 'pick-channel') {
+                embed.setFooter({ text: 'Select the channel to bridge. I will create a webhook automatically if possible.' });
+            } else if (context.stage === 'manual-webhook') {
+                embed.setFooter({ text: 'Paste the channel\'s webhook URL into the modal to complete the link.' });
+            }
+        } else if (context?.action === 'remove') {
+            embed.setFooter({ text: 'Select the channels you want to remove from this bridge.' });
+        } else if (context?.action === 'confirm-delete') {
+            embed.setFooter({ text: 'This action cannot be undone. Confirm to delete the bridge.' });
+        }
+
+        const actionsRow = new ActionRowBuilder().addComponents(
+            new ButtonBuilder().setCustomId(`setup:rainbow:addChannel:${bridgeId}`).setLabel('Add channel').setStyle(ButtonStyle.Primary),
+            new ButtonBuilder().setCustomId(`setup:rainbow:removeChannel:${bridgeId}`).setLabel('Remove channel').setStyle(ButtonStyle.Secondary).setDisabled(!bridge.channels?.length),
+            new ButtonBuilder().setCustomId(`setup:rainbow:toggleBots:${bridgeId}`).setLabel(bots ? 'Disable bot mirroring' : 'Enable bot mirroring').setStyle(ButtonStyle.Secondary),
+            new ButtonBuilder().setCustomId(`setup:rainbow:deleteBridge:${bridgeId}`).setLabel('Delete bridge').setStyle(ButtonStyle.Danger)
+        );
+
+        components.push(actionsRow);
+        components.push(new ActionRowBuilder().addComponents(
+            new ButtonBuilder().setCustomId('setup:rainbow:backToList').setLabel('Back to bridges').setStyle(ButtonStyle.Secondary)
+        ));
+
+        if (context?.action === 'add' && context.stage === 'pick-guild') {
+            const menu = new StringSelectMenuBuilder()
+            .setCustomId(`setup:rainbow:pickGuild:${bridgeId}`)
+            .setPlaceholder(guildOptionList.length ? 'Select a server…' : 'No accessible servers')
+            .setMinValues(1)
+            .setMaxValues(1)
+            .setDisabled(!guildOptionList.length);
+
+            if (guildOptionList.length) {
+                menu.addOptions(guildOptionList.slice(0, 25).map((opt) => ({
+                    label: truncateName(opt.name, 100),
+                    description: `ID: ${opt.id}`.slice(0, 100),
+                    value: opt.id,
+                    default: context?.selectedGuildId === opt.id
+                })));
+            } else {
+                menu.addOptions({ label: 'No available servers', value: 'noop', default: true });
+            }
+            components.push(new ActionRowBuilder().addComponents(menu));
+        }
+
+        if (context?.action === 'add' && context.stage === 'pick-channel') {
+            const guildId = context.selectedGuildId ?? null;
+            const guild = guildId ? await fetchGuild(client, guildId) : null;
+            const channels = guild ? await collectTextChannels(guild) : [];
+            const menu = new StringSelectMenuBuilder()
+            .setCustomId(`setup:rainbow:pickChannel:${bridgeId}`)
+            .setPlaceholder(guild ? 'Select a channel…' : 'Select a server first')
+            .setMinValues(1)
+            .setMaxValues(1)
+            .setDisabled(!guild || !channels.length);
+
+            if (channels.length) {
+                menu.addOptions(channels.slice(0, 25).map((channel) => ({
+                    label: truncateName(channel.name, 100),
+                    description: `#${channel.name}`.slice(0, 100),
+                    value: channel.id
+                })));
+            } else {
+                menu.addOptions({ label: 'No text channels found', value: 'noop', default: true });
+            }
+            components.push(new ActionRowBuilder().addComponents(menu));
+        }
+
+        if (context?.action === 'remove') {
+            const options = (bridge.channels || []).map((channel) => ({
+                label: truncateName(`${channel.guildId} • ${channel.channelId}`, 100),
+                description: `${channel.guildId} — ${channel.channelId}`.slice(0, 100),
+                value: `${channel.guildId}:${channel.channelId}`
+            }));
+            const menu = new StringSelectMenuBuilder()
+            .setCustomId(`setup:rainbow:removeChannelSelect:${bridgeId}`)
+            .setPlaceholder(options.length ? 'Select channels to remove…' : 'This bridge has no channels yet')
+            .setMinValues(Math.min(1, options.length))
+            .setMaxValues(Math.min(25, options.length || 1))
+            .setDisabled(!options.length);
+            if (options.length) {
+                menu.addOptions(options.slice(0, 25));
+            } else {
+                menu.addOptions({ label: 'No channels to remove', value: 'noop', default: true });
+            }
+            components.push(new ActionRowBuilder().addComponents(menu));
+        }
+
+        if (context?.action === 'confirm-delete') {
+            components.push(new ActionRowBuilder().addComponents(
+                new ButtonBuilder().setCustomId(`setup:rainbow:confirmDelete:${bridgeId}`).setLabel('Yes, delete bridge').setStyle(ButtonStyle.Danger),
+                new ButtonBuilder().setCustomId(`setup:rainbow:cancelDelete:${bridgeId}`).setLabel('Cancel').setStyle(ButtonStyle.Secondary)
+            ));
+        }
+
+        appendHomeButtonRow(components);
+        return { embeds: [embed], components };
+    }
+
+    appendHomeButtonRow(components);
+    return { embeds: [embed], components };
 }
 
 async function handleAutobouncerInteraction({ interaction, entry, config, key, logger }) {

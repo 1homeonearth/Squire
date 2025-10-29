@@ -73,9 +73,40 @@ All configuration lives in `config.json`. Secrets can alternatively be provided 
 | `loggingChannels` | Optional map of log categories (`messages`, `moderation`, `joins`, `system`) to dedicated channel IDs in the logging server. |
 | `excludeChannels` | Per-guild arrays of source channel IDs to ignore while forwarding. |
 | `excludeCategories` | Per-guild arrays of category IDs to ignore while forwarding. |
+| `rainbowBridge` | Two-way bridge config block (see below). |
 | `featureOrder` | Optional array of feature folder names to control load/listener registration order. |
 | `autoban` | Auto-bouncer config block (see below). |
 | `welcome` | Welcome card config block (see below). |
+
+### Rainbow Bridge config
+
+```json
+"rainbowBridge": {
+  "forwardBots": true,
+  "bridges": {
+    "main-halls": {
+      "name": "Main Halls",
+      "channels": [
+        {
+          "guildId": "123456789012345678",
+          "channelId": "234567890123456789",
+          "webhookUrl": "https://discord.com/api/webhooks/..."
+        },
+        {
+          "guildId": "987654321098765432",
+          "channelId": "876543210987654321",
+          "webhookUrl": "https://discord.com/api/webhooks/..."
+        }
+      ]
+    }
+  }
+}
+```
+
+- `forwardBots` controls whether bot-authored posts are mirrored globally; individual bridges can override this with their own `forwardBots` flag.
+- Each bridge lists the guild/channel pairs that should stay in sync. Provide the channel's webhook URL so Squire can speak in that channel.
+- The Rainbow Bridge setup panel can automatically create webhooks when it has the **Manage Webhooks** permission, or you can paste an existing webhook URL.
+- Add at least two channels per bridge for syncing to begin. Edits and deletions propagate between every linked channel.
 
 ### Auto-bouncer config
 
@@ -124,6 +155,7 @@ The `/setup` command opens an overview for operators with the **Manage Server** 
 - Pick the logging server and the list of “main” servers once, then jump into the Logging, Welcome Cards, or Autobouncer modules from any guild.
 - Logging — select which main server to configure, link it to a logging channel inside the logging server, manage excluded channels/categories, assign dedicated logging categories, and tune the sampling/bot-forwarding options.
 - Welcome Cards — choose a target server, set its welcome channel, and pick (or clear) the rules/roles/verify references individually.
+- Rainbow Bridge — link channels across servers so messages, edits, and deletions stay in sync everywhere.
 - Autobouncer — toggle the module, edit the blocked keyword list, and choose the logging server channel that receives autobounce notifications.
 
 Every change is persisted to `config.json`, so redeploys and restarts keep the configured state without manual file edits.
