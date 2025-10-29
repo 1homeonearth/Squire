@@ -14,7 +14,7 @@ import {
 } from 'discord.js';
 
 import { writeConfig } from '../../core/config.js';
-import { normalizeRainbowBridgeConfig } from '../rainbow-bridge/index.js';
+import { normalizeRainbowBridgeConfig, refresh as refreshRainbowBridge } from '../rainbow-bridge/index.js';
 
 const LOGGING_CHANNEL_CATEGORIES = [
     { key: 'messages', label: 'Message logs', description: 'Cross-server message forwards.' },
@@ -1489,6 +1489,7 @@ async function handleRainbowBridgeInteraction({ interaction, entry, config, key,
                 const next = !current;
                 bridges[bridgeId].forwardBots = next;
                 config.rainbowBridge = normalizeRainbowBridgeConfig(config.rainbowBridge);
+                refreshRainbowBridge();
                 saveConfig(config, logger);
                 await updateView('manage', { bridgeId });
                 await interaction.followUp({
@@ -1515,6 +1516,7 @@ async function handleRainbowBridgeInteraction({ interaction, entry, config, key,
                 const name = bridges[bridgeId].name ?? bridgeId;
                 delete bridges[bridgeId];
                 config.rainbowBridge = normalizeRainbowBridgeConfig(config.rainbowBridge);
+                refreshRainbowBridge();
                 saveConfig(config, logger);
                 await updateView('default', {});
                 await interaction.followUp({ content: `Bridge **${name}** deleted.`, ephemeral: true }).catch(() => {});
@@ -1612,6 +1614,7 @@ async function handleRainbowBridgeInteraction({ interaction, entry, config, key,
                 bridge.channels = Array.isArray(bridge.channels) ? bridge.channels : [];
                 bridge.channels.push({ guildId, channelId, webhookUrl });
                 config.rainbowBridge = normalizeRainbowBridgeConfig(config.rainbowBridge);
+                refreshRainbowBridge();
                 saveConfig(config, logger);
                 await updateView('manage', { bridgeId });
                 await interaction.followUp({
@@ -1657,6 +1660,7 @@ async function handleRainbowBridgeInteraction({ interaction, entry, config, key,
             });
             const removed = before - (bridges[bridgeId].channels?.length ?? 0);
             config.rainbowBridge = normalizeRainbowBridgeConfig(config.rainbowBridge);
+            refreshRainbowBridge();
             saveConfig(config, logger);
             await updateView('manage', { bridgeId });
             await interaction.followUp({ content: `Removed ${removed} channel${removed === 1 ? '' : 's'} from this bridge.`, ephemeral: true }).catch(() => {});
@@ -1683,6 +1687,7 @@ async function handleRainbowBridgeInteraction({ interaction, entry, config, key,
             config.rainbowBridge.bridges = config.rainbowBridge.bridges || {};
             config.rainbowBridge.bridges[bridgeId] = { name: displayName, channels: [] };
             config.rainbowBridge = normalizeRainbowBridgeConfig(config.rainbowBridge);
+            refreshRainbowBridge();
             saveConfig(config, logger);
             await interaction.reply({ content: `Bridge **${displayName}** created. Add at least two channels to activate it.`, ephemeral: true });
             if (entry?.message) {
@@ -1722,6 +1727,7 @@ async function handleRainbowBridgeInteraction({ interaction, entry, config, key,
             bridge.channels = Array.isArray(bridge.channels) ? bridge.channels : [];
             bridge.channels.push({ guildId, channelId, webhookUrl: url });
             config.rainbowBridge = normalizeRainbowBridgeConfig(config.rainbowBridge);
+            refreshRainbowBridge();
             saveConfig(config, logger);
             await interaction.reply({ content: 'Webhook linked successfully.', ephemeral: true });
             if (entry?.message) {
