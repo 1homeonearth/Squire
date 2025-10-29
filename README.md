@@ -1,8 +1,8 @@
 # Squire — Utility Bot for The Unbreakable Crown
 
-Squire is a multi-feature Discord bot that keeps the Unbreakable Crown server network in sync. It forwards activity into a central "Queen's Court" hub, greets new arrivals with bespoke welcome cards, and automatically bans the wave of "mega/link" spam bots that have been raiding the community.
+Squire is a multi-feature Discord bot that keeps the Unbreakable Crown server network in sync. It forwards activity into a central "Queen's Court" hub, greets new arrivals with bespoke welcome cards, keeps linked channels mirrored across servers, and automatically bans the wave of "mega/link" spam bots that have been raiding the community.
 
-The project is written in modern ECMAScript modules on top of [`discord.js` v14](https://discord.js.org/#/docs/discord.js/main/general/welcome) and runs on Node.js 18.17 or newer. Feature modules live in `src/features/*` and are dynamically discovered at startup so that functionality can grow without touching the core runtime.
+The project is written in modern ECMAScript modules on top of [`discord.js` v14](https://discord.js.org/#/docs/discord.js/main/general/welcome) and runs on Node.js 22 or newer. Feature modules live in `src/features/*` and are dynamically discovered at startup so that functionality can grow without touching the core runtime.
 
 ## Features
 
@@ -17,6 +17,12 @@ The project is written in modern ECMAScript modules on top of [`discord.js` v14]
   - Instantly bans unverified accounts whose username, display name, or global name contains known spam terms (mega/megas/link/links by default).
   - Optional notification channel/webhooks + verified-role exemptions so trusted members or staff can bypass the filter.
   - Persists every decision (success, permission failure, unexpected error) to the LokiJS database for auditability.
+- **Rainbow Bridge** (`src/features/rainbow-bridge/`)
+  - Mirrors messages, edits, and deletions across linked channels spanning multiple guilds.
+  - Supports per-bridge overrides for bot forwarding, friendly bridge names, and automatic embed cleanup for rich media.
+- **Setup panel** (`src/features/setup/`)
+  - Provides the `/setup` slash command that gives admins an in-Discord control panel for every module.
+  - Manages logging destinations, welcome channel reminders, rainbow bridge links, and autobouncer keywords without editing `config.json` manually.
 
 ## Repository layout
 
@@ -28,9 +34,21 @@ src/
     logging-forwarder/
     welcome-cards/
     auto-bouncer/
+    rainbow-bridge/
+    setup/
 config.sample.json      # Copy to config.json and fill with production secrets
 squire.db.json          # LokiJS JSON dump (created on first run if not present)
 ```
+
+## Development workflow
+
+1. **Install prerequisites** — Node.js 22+ and npm 10+.
+2. **Install dependencies** — `npm install`.
+3. **Run linting & tests** — `npm run lint` and `npm test` before pushing changes.
+4. **Type check (optional)** — `npm run build` invokes `tsc -p .` to surface declaration issues.
+5. **Deploy slash commands** — `npm run deploy:commands` publishes `/setup` (and any future commands) to the configured guilds.
+
+For production hosts, the `squirectl` helper wraps deployment tasks (fetching from `origin/main`, running `npm ci`, rendering config from environment, and managing the systemd unit).
 
 ## Getting started
 
