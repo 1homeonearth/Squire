@@ -292,18 +292,18 @@ function prepareSendPayload({ message, bridgeId, bridge }) {
         allowedMentions: { parse: [] }
     };
 
+    payload.embeds = [embed];
+
     if (hasYouTube) {
         const messageBody = content.trim();
         const combined = [contextLine, messageBody].filter(Boolean).join('\n\n').trim();
         if (combined.length) {
             payload.content = combined;
         }
-        payload.embeds = [];
     } else {
         if (content.length) {
             payload.content = content;
         }
-        payload.embeds = [embed];
     }
 
     return payload;
@@ -317,13 +317,12 @@ function prepareEditPayload({ message, bridgeId, bridge }) {
     const payload = {
         allowedMentions: { parse: [] }
     };
+    payload.embeds = [embed];
     if (hasYouTube) {
         const messageBody = content.trim();
         const combined = [contextLine, messageBody].filter(Boolean).join('\n\n').trim();
         payload.content = combined.length ? combined : '';
-        payload.embeds = [];
     } else {
-        payload.embeds = [embed];
         if (content.length) {
             payload.content = content;
         } else {
@@ -342,6 +341,13 @@ export async function init({ client, config, logger }) {
 
     config.rainbowBridge = normalizeRainbowBridgeConfig(config.rainbowBridge);
     rebuildState();
+
+    client.on('squire:configUpdated', (nextConfig) => {
+        if (!nextConfig || typeof nextConfig !== 'object') return;
+        runtime.config = nextConfig;
+        runtime.dirty = true;
+        rebuildState();
+    });
 
     function getWebhookClient(entry) {
         const key = `${entry.webhookId}:${entry.webhookToken}`;

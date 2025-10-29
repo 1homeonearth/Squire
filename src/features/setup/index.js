@@ -24,6 +24,7 @@ const LOGGING_CHANNEL_CATEGORIES = [
 ];
 
 const panelStore = new Map(); // `${userId}:${module}` -> { message, guildId, mode, context }
+let activeClient = null;
 
 export const commands = [
     new SlashCommandBuilder()
@@ -33,6 +34,7 @@ export const commands = [
 ];
 
 export function init({ client, config, logger }) {
+    activeClient = client;
     ensureConfigShape(config);
 
     client.on('interactionCreate', async (interaction) => {
@@ -266,10 +268,20 @@ function extractModuleFromInteraction(interaction) {
 function saveConfig(config, logger) {
     try {
         writeConfig(config);
+        broadcastConfigUpdate(config, logger);
         return true;
     } catch (err) {
         logger?.error?.(`[setup] Failed to persist config: ${err?.message ?? err}`);
         return false;
+    }
+}
+
+function broadcastConfigUpdate(config, logger) {
+    if (!activeClient?.emit) return;
+    try {
+        activeClient.emit('squire:configUpdated', config);
+    } catch (err) {
+        logger?.warn?.(`[setup] Failed to broadcast config update: ${err?.message ?? err}`);
     }
 }
 
