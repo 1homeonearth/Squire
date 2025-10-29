@@ -53,7 +53,14 @@ const nextColor = nextColorGen();
 
 // --- exported feature entrypoint ---
 export async function init({ client, config, logger }) {
-    const LOGGING_SERVER_ID = config.loggingServerId || null;
+    let loggingServerId = config.loggingServerId || null;
+
+    client.on('squire:configUpdated', (nextConfig) => {
+        try {
+            const source = nextConfig && typeof nextConfig === 'object' ? nextConfig : config;
+            loggingServerId = source.loggingServerId || null;
+        } catch {}
+    });
 
     if (!config.mapping || typeof config.mapping !== 'object') {
         config.mapping = {};
@@ -102,7 +109,7 @@ export async function init({ client, config, logger }) {
             if (!message.guild) return;
 
             // Ignore the logging server as a source, if specified
-            if (LOGGING_SERVER_ID && message.guild.id === LOGGING_SERVER_ID) {
+            if (loggingServerId && message.guild.id === loggingServerId) {
                 logger.verbose?.(`[MSG] server=${message.guild.id} (${message.guild.name}) — skipped: logging server`);
                 return;
             }
@@ -145,7 +152,41 @@ export async function init({ client, config, logger }) {
             const attachmentUrls = Array.from(message.attachments.values()).map(att => att.url).filter(Boolean);
             const channelLabel = message.channel?.name ? `**${message.channel.name}**` : '';
 
-            const wh = new WebhookClient({ url: webhookURL, allowedMentions: { parse: [], repliedUser: false } });
+            // If NSFW and there are images/gifs, drop the post entirely (avoid empty forwards)
+            const media = extractImageLike(message);
+            if (isNsfw && media.length > 0) {
+                logger.verbose?.(`[MSG] ${message.guild.name} #${message.channel.name} — NSFW with media: dropped`);
+                return;
+            }
+
+            const color = nextColor(gid);
+            const embed = new EmbedBuilder().setColor(color);
+
+            const normalizedContent = (sanitizedContent || '').trim().length
+                ? trunc(sanitizedContent, 4096)
+                : '';
+            if (normalizedContent) {
+                embed.setDescription(normalizedContent);
+            }
+
+            if (!normalizedContent && channelLabel) {
+                embed.setDescription(trunc(channelLabel, 4096));
+            }
+
+            if (!isNsfw && media.length > 0) {
+                const first = media.find(u => /\.(gif|mp4)(?:$|\?)/i.test(u)) || media[0];
+                embed.setImage(first);
+            }
+
+            if (!embed.data.description && !embed.data.image) {
+                embed.setDescription('\u200B');
+            }
+
+            const payload = {
+                username: usernameForWebhook,
+                avatarURL: avatarForWebhook,
+                embeds: [embed]
+            };
 
             if (hasYouTube) {
                 const parts = [];
@@ -154,49 +195,17 @@ export async function init({ client, config, logger }) {
                 if (attachmentUrls.length) parts.push(attachmentUrls.join('\n'));
 
                 const payloadContent = parts.join('\n\n').trim();
-                if (payloadContent.length === 0) return;
-
-                await wh.send({
-                    content: payloadContent,
-                    username: usernameForWebhook,
-                    avatarURL: avatarForWebhook
-                });
-
-                const gname = message.guild?.name ?? gid;
-                const cname = message.channel?.name ?? message.channel?.id;
-                logger.info(`[FWD] ${gname} #${cname} — by ${usernameForWebhook}`);
-                return;
+                if (payloadContent.length === 0 && !media.length) return;
+                if (payloadContent.length > 0) {
+                    payload.content = payloadContent;
+                }
+            } else if (channelLabel) {
+                payload.content = channelLabel;
             }
 
-            const content = sanitizedContent || (message.attachments.size ? '' : '');
+            const wh = new WebhookClient({ url: webhookURL, allowedMentions: { parse: [], repliedUser: false } });
+            await wh.send(payload);
 
-            // If NSFW and there are images/gifs, drop the post entirely (avoid empty forwards)
-            const media = extractImageLike(message);
-            if (isNsfw && media.length > 0) {
-                logger.verbose?.(`[MSG] ${message.guild.name} #${message.channel.name} — NSFW with media: dropped`);
-                return;
-            }
-
-            // If we have any “moving” media (gif/mp4) or images, prefer showing the first as embed image.
-            const color = nextColor(gid);
-            const embed = new EmbedBuilder().setColor(color);
-            if (content) embed.setDescription(trunc(content, 4096));
-
-            // pick the first viable media for the embed
-            if (!isNsfw && media.length > 0) {
-                // Prefer gif/mp4-like URLs; otherwise first image-like URL
-                const first = media.find(u => /\.(gif|mp4)(?:$|\?)/i.test(u)) || media[0];
-                embed.setImage(first);
-            }
-
-            await wh.send({
-                content: `**${message.channel.name}**`,
-                username: usernameForWebhook,
-                avatarURL: avatarForWebhook,
-                embeds: embed.data.description || embed.data.image ? [embed] : []
-            });
-
-            // console “signs of life”
             const gname = message.guild?.name ?? gid;
             const cname = message.channel?.name ?? message.channel?.id;
             logger.info(`[FWD] ${gname} #${cname} — by ${usernameForWebhook}`);
