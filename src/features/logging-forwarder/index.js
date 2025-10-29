@@ -7,6 +7,7 @@ import {
     WebhookClient,
     EmbedBuilder
 } from 'discord.js';
+import { isYouTubeUrl, prepareForNativeEmbed } from '../../lib/youtube.js';
 
 const RAINBOW = [0xFF0000, 0xFFA500, 0xFFFF00, 0x00FF00, 0x0000FF, 0x800080];
 
@@ -138,7 +139,36 @@ export async function init({ client, config, logger }) {
             message.member?.displayAvatarURL() ??
             message.author.displayAvatarURL();
 
-            const content = message.content || (message.attachments.size ? '' : '');
+            const rawContent = message.content || '';
+            const hasYouTube = isYouTubeUrl(rawContent);
+            const sanitizedContent = hasYouTube ? prepareForNativeEmbed(rawContent) : rawContent;
+            const attachmentUrls = Array.from(message.attachments.values()).map(att => att.url).filter(Boolean);
+            const channelLabel = message.channel?.name ? `**${message.channel.name}**` : '';
+
+            const wh = new WebhookClient({ url: webhookURL, allowedMentions: { parse: [], repliedUser: false } });
+
+            if (hasYouTube) {
+                const parts = [];
+                if (channelLabel) parts.push(channelLabel);
+                if (sanitizedContent.trim()) parts.push(sanitizedContent.trim());
+                if (attachmentUrls.length) parts.push(attachmentUrls.join('\n'));
+
+                const payloadContent = parts.join('\n\n').trim();
+                if (payloadContent.length === 0) return;
+
+                await wh.send({
+                    content: payloadContent,
+                    username: usernameForWebhook,
+                    avatarURL: avatarForWebhook
+                });
+
+                const gname = message.guild?.name ?? gid;
+                const cname = message.channel?.name ?? message.channel?.id;
+                logger.info(`[FWD] ${gname} #${cname} — by ${usernameForWebhook}`);
+                return;
+            }
+
+            const content = sanitizedContent || (message.attachments.size ? '' : '');
 
             // If NSFW and there are images/gifs, drop the post entirely (avoid empty forwards)
             const media = extractImageLike(message);
@@ -158,8 +188,6 @@ export async function init({ client, config, logger }) {
                 const first = media.find(u => /\.(gif|mp4)(?:$|\?)/i.test(u)) || media[0];
                 embed.setImage(first);
             }
-
-            const wh = new WebhookClient({ url: webhookURL, allowedMentions: { parse: [], repliedUser: false } });
 
             await wh.send({
                 content: `**${message.channel.name}**`,

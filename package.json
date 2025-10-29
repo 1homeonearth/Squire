@@ -1,6 +1,7 @@
 {
   "name": "squire",
   "version": "2.0.0",
+  "license": "GPL-3.0-only",
   "description": "Discord bot for The Unbreakable Crown",
   "type": "module",
   "main": "src/index.js",
