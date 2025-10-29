@@ -29,15 +29,6 @@ export const commands = [
     .setName('setup')
     .setDescription('Configure Squire modules')
     .setDefaultMemberPermissions(PermissionFlagsBits.ManageGuild)
-    .addSubcommand((sub) => sub
-        .setName('logging')
-        .setDescription('Configure logging forwarder'))
-    .addSubcommand((sub) => sub
-        .setName('welcome')
-        .setDescription('Configure welcome card module'))
-    .addSubcommand((sub) => sub
-        .setName('autobouncer')
-        .setDescription('Configure autobouncer keyword list'))
 ];
 
 export function init({ client, config, logger }) {
@@ -55,58 +46,20 @@ export function init({ client, config, logger }) {
                     return;
                 }
 
-                const sub = interaction.options.getSubcommand();
-                const key = panelKey(interaction.user?.id, sub);
-                panelStore.delete(key);
+                const homeKey = panelKey(interaction.user?.id, 'home');
+                panelStore.delete(homeKey);
 
                 await interaction.deferReply({ ephemeral: true });
-
-                if (sub === 'logging') {
-                    const view = await buildLoggingView({
-                        config,
-                        client,
-                        guild: interaction.guild,
-                        mode: 'default',
-                        context: {}
-                    });
-                    const message = await interaction.editReply(view);
-                    panelStore.set(key, { message, guildId: interaction.guildId, mode: 'default', context: {} });
-                    return;
-                }
-
-                if (sub === 'welcome') {
-                    const view = await buildWelcomeView({
-                        config,
-                        guild: interaction.guild,
-                        mode: 'default',
-                        context: {}
-                    });
-                    const message = await interaction.editReply(view);
-                    panelStore.set(key, { message, guildId: interaction.guildId, mode: 'default', context: {} });
-                    return;
-                }
-
-                if (sub === 'autobouncer') {
-                    const view = buildAutobouncerView({ config });
-                    const message = await interaction.editReply(view);
-                    panelStore.set(key, { message, guildId: interaction.guildId, mode: 'default', context: {} });
-                    return;
-                }
-
-                await interaction.editReply({ content: 'Unknown setup module.', components: [] });
+                const guildOptions = await collectManageableGuilds({ client, userId: interaction.user.id });
+                const view = await buildHomeView({ client, config, guildOptions });
+                const message = await interaction.editReply(view);
+                panelStore.set(homeKey, { message, guildOptions, view: 'home' });
                 return;
             }
 
             if (!interaction.customId?.startsWith('setup:') && !interaction.isModalSubmit()) {
                 return;
             }
-
-            const module = extractModuleFromInteraction(interaction);
-            if (!module) return;
-
-            const key = panelKey(interaction.user?.id, module);
-            const entry = panelStore.get(key);
-            const guild = interaction.guild ?? (entry?.guildId ? await fetchGuild(client, entry.guildId) : null);
 
             if (!hasManageGuild(interaction)) {
                 if (interaction.isRepliable()) {
@@ -115,18 +68,39 @@ export function init({ client, config, logger }) {
                 return;
             }
 
+            if (interaction.customId === 'setup:navigate:home') {
+                const homeKey = panelKey(interaction.user?.id, 'home');
+                const homeEntry = panelStore.get(homeKey);
+                const guildOptions = homeEntry?.guildOptions ?? await collectManageableGuilds({ client, userId: interaction.user.id });
+                const view = await buildHomeView({ client, config, guildOptions });
+                const message = await interaction.update(view);
+                panelStore.set(homeKey, { message, guildOptions, view: 'home' });
+                return;
+            }
+
+            const module = extractModuleFromInteraction(interaction);
+            if (module === 'home') {
+                const homeKey = panelKey(interaction.user?.id, 'home');
+                const homeEntry = panelStore.get(homeKey) ?? {};
+                await handleHomeInteraction({ interaction, config, client, logger, homeKey, homeEntry });
+                return;
+            }
+
+            const key = panelKey(interaction.user?.id, module);
+            const entry = panelStore.get(key);
+
             if (module === 'logging') {
-                await handleLoggingInteraction({ interaction, entry, config, client, logger, key, guild });
+                await handleLoggingInteraction({ interaction, entry, config, client, logger, key });
                 return;
             }
 
             if (module === 'welcome') {
-                await handleWelcomeInteraction({ interaction, entry, config, client, key, guild, logger });
+                await handleWelcomeInteraction({ interaction, entry, config, client, key, logger });
                 return;
             }
 
             if (module === 'autobouncer') {
-                await handleAutobouncerInteraction({ interaction, entry, config, key, logger });
+                await handleAutobouncerInteraction({ interaction, entry, config, key, logger, client });
                 return;
             }
         } catch (err) {
@@ -147,12 +121,17 @@ function ensureConfigShape(config) {
     config.loggingWebhookMeta = coerceRecord(config.loggingWebhookMeta);
     config.loggingChannels = coerceRecord(config.loggingChannels);
 
-    if (!config.welcome || typeof config.welcome !== 'object') {
-        config.welcome = {};
+    const derivedMain = Object.keys(config.mapping || {});
+    config.mainServerIds = sanitizeIdArray(Array.isArray(config.mainServerIds) ? config.mainServerIds : derivedMain);
+    if (config.loggingServerId) {
+        config.mainServerIds = config.mainServerIds.filter(id => id !== config.loggingServerId);
     }
-    if (!config.welcome.mentions || typeof config.welcome.mentions !== 'object') {
-        config.welcome.mentions = {};
-    }
+
+    config.welcome = normalizeWelcomeMap({
+        value: config.welcome,
+        fallbackGuilds: config.mainServerIds,
+        loggingServerId: config.loggingServerId
+    });
 
     if (!config.autoban || typeof config.autoban !== 'object') {
         config.autoban = {};
@@ -163,10 +142,72 @@ function ensureConfigShape(config) {
     } else {
         config.autoban.blockedUsernames = config.autoban.blockedUsernames.map(String);
     }
+    if (!Array.isArray(config.autoban.notifyWebhookUrls)) {
+        const value = config.autoban.notifyWebhookUrls;
+        config.autoban.notifyWebhookUrls = Array.isArray(value) ? value.map(String) : [];
+    } else {
+        config.autoban.notifyWebhookUrls = config.autoban.notifyWebhookUrls.map(String);
+    }
+    config.autoban.notifyChannelId = config.autoban.notifyChannelId ? String(config.autoban.notifyChannelId) : null;
 
     if (typeof config.sampleRate !== 'number' || Number.isNaN(config.sampleRate)) {
         config.sampleRate = 1;
     }
+}
+
+function sanitizeIdArray(value) {
+    if (!Array.isArray(value)) return [];
+    const seen = new Set();
+    const out = [];
+    for (const entry of value) {
+        const str = String(entry);
+        if (!str || seen.has(str)) continue;
+        seen.add(str);
+        out.push(str);
+    }
+    return out;
+}
+
+function normalizeWelcomeMap({ value, fallbackGuilds, loggingServerId }) {
+    const out = {};
+    if (!value || typeof value !== 'object') {
+        return out;
+    }
+
+    const entries = Object.entries(value);
+    const looksLegacy = 'channelId' in value || 'mentions' in value;
+    const looksMap = entries.every(([key, v]) => typeof v === 'object' && !Array.isArray(v));
+
+    if (looksLegacy) {
+        const targetGuildId = fallbackGuilds?.find(id => id) || loggingServerId || null;
+        if (targetGuildId) {
+            out[targetGuildId] = normalizeWelcomeEntry(value);
+        }
+        return out;
+    }
+
+    if (!looksMap) {
+        return out;
+    }
+
+    for (const [guildId, entry] of entries) {
+        if (!guildId) continue;
+        out[String(guildId)] = normalizeWelcomeEntry(entry);
+    }
+    return out;
+}
+
+function normalizeWelcomeEntry(entry) {
+    const obj = entry && typeof entry === 'object' ? entry : {};
+    const channelId = obj.channelId ? String(obj.channelId) : null;
+    const mentions = {};
+    const rawMentions = obj.mentions && typeof obj.mentions === 'object' ? obj.mentions : {};
+    for (const key of ['rules', 'roles', 'verify']) {
+        if (rawMentions[key]) {
+            mentions[key] = String(rawMentions[key]);
+        }
+    }
+    return { channelId, mentions };
 }
 
 function coerceRecord(value) {
@@ -224,67 +265,339 @@ function saveConfig(config, logger) {
     }
 }
 
-async function handleLoggingInteraction({ interaction, entry, config, client, logger, key, guild }) {
-    const sourceGuild = guild ?? (entry?.guildId ? await fetchGuild(client, entry.guildId) : null);
+async function collectManageableGuilds({ client, userId }) {
+    if (!userId) return [];
+    const results = [];
+    const seen = new Set();
+    for (const guild of client.guilds.cache.values()) {
+        if (!guild || seen.has(guild.id)) continue;
+        seen.add(guild.id);
+        let member = guild.members.cache.get(userId);
+        if (!member) {
+            try {
+                member = await guild.members.fetch({ user: userId, force: false });
+            } catch {
+                member = null;
+            }
+        }
+        if (!member) continue;
+        if (!member.permissions?.has?.(PermissionFlagsBits.ManageGuild)) continue;
+        results.push({ id: guild.id, name: guild.name });
+    }
+    results.sort((a, b) => a.name.localeCompare(b.name));
+    return results;
+}
+
+async function buildHomeView({ client, config, guildOptions }) {
+    const options = Array.isArray(guildOptions) ? guildOptions : [];
+    const loggingServerId = config.loggingServerId ?? null;
+    const loggingGuild = loggingServerId ? await fetchGuild(client, loggingServerId) : null;
+
+    const optionMap = new Map(options.map(opt => [opt.id, opt.name]));
+    if (loggingGuild && !optionMap.has(loggingGuild.id)) {
+        optionMap.set(loggingGuild.id, loggingGuild.name);
+    }
+
+    const mainServers = Array.isArray(config.mainServerIds) ? config.mainServerIds : [];
+    const mainSummary = mainServers.length
+        ? mainServers.map(id => `• ${optionMap.get(id) ?? `Server ${id}`} (${id})`).join('\n')
+        : 'No main servers selected yet. Use the selector below to choose them.';
+
+    const autobanChannelId = config.autoban?.notifyChannelId ?? null;
+    const autobanChannelDisplay = loggingGuild
+        ? formatChannel(loggingGuild, autobanChannelId)
+        : (autobanChannelId ? `<#${autobanChannelId}>` : 'Not configured');
+
+    const embed = new EmbedBuilder()
+    .setTitle('Squire setup overview')
+    .setDescription('Manage global targets and jump into module-specific configuration.')
+    .addFields(
+        {
+            name: 'Logging server',
+            value: loggingGuild ? `${loggingGuild.name} (${loggingGuild.id})` : 'Not configured',
+            inline: false
+        },
+        {
+            name: 'Main servers',
+            value: mainSummary,
+            inline: false
+        },
+        {
+            name: 'Autobouncer notifications',
+            value: autobanChannelDisplay,
+            inline: false
+        }
+    );
+
+    const components = [];
+
+    const loggingMenu = new StringSelectMenuBuilder()
+    .setCustomId('setup:home:loggingServer')
+    .setPlaceholder(options.length ? 'Select logging server…' : 'No servers available')
+    .setMinValues(1)
+    .setMaxValues(1)
+    .setDisabled(!options.length);
+
+    const loggingOptions = options.slice(0, 24).map(opt => ({
+        label: truncateName(opt.name, 100),
+        description: `ID: ${opt.id}`.slice(0, 100),
+        value: opt.id,
+        default: opt.id === loggingServerId
+    }));
+    if (loggingGuild && !loggingOptions.find(opt => opt.value === loggingGuild.id)) {
+        loggingOptions.unshift({
+            label: truncateName(loggingGuild.name, 100),
+            description: `ID: ${loggingGuild.id}`.slice(0, 100),
+            value: loggingGuild.id,
+            default: true
+        });
+    }
+    if (loggingOptions.length) {
+        loggingOptions.push({
+            label: 'Clear logging server',
+            description: 'Remove the logging server configuration.',
+            value: '__clear__'
+        });
+        loggingMenu.addOptions(loggingOptions);
+    } else {
+        loggingMenu.addOptions({ label: 'No available servers', value: 'noop', default: true });
+    }
+    components.push(new ActionRowBuilder().addComponents(loggingMenu));
+
+    const filteredMain = options.filter(opt => opt.id !== loggingServerId);
+    const mainMenu = new StringSelectMenuBuilder()
+    .setCustomId('setup:home:mainServers')
+    .setPlaceholder(filteredMain.length ? 'Select main servers…' : 'Add more servers to manage')
+    .setMinValues(0)
+    .setMaxValues(Math.max(1, Math.min(25, filteredMain.length || 1)))
+    .setDisabled(!filteredMain.length);
+
+    const mainOptions = filteredMain.map(opt => ({
+        label: truncateName(opt.name, 100),
+        description: `ID: ${opt.id}`.slice(0, 100),
+        value: opt.id,
+        default: mainServers.includes(opt.id)
+    }));
+    for (const id of mainServers) {
+        if (filteredMain.find(opt => opt.id === id)) continue;
+        const label = optionMap.get(id) || `Server ${id}`;
+        mainOptions.push({
+            label: truncateName(label, 100),
+            description: `ID: ${id}`.slice(0, 100),
+            value: id,
+            default: true
+        });
+    }
+    if (mainOptions.length) {
+        mainMenu.addOptions(mainOptions.slice(0, 25));
+    } else {
+        mainMenu.addOptions({ label: 'No selectable servers', value: 'noop', default: true });
+    }
+    components.push(new ActionRowBuilder().addComponents(mainMenu));
+
+    const moduleMenu = new StringSelectMenuBuilder()
+    .setCustomId('setup:home:module')
+    .setPlaceholder('Open a setup module…')
+    .setMinValues(1)
+    .setMaxValues(1)
+    .addOptions(
+        { label: 'Logging', value: 'logging', description: 'Configure webhooks and exclusions.' },
+        { label: 'Welcome cards', value: 'welcome', description: 'Choose welcome, rules, roles, and verify channels.' },
+        { label: 'Autobouncer', value: 'autobouncer', description: 'Manage autoban keywords and notification channel.' }
+    );
+    components.push(new ActionRowBuilder().addComponents(moduleMenu));
+
+    return { embeds: [embed], components };
+}
+
+async function handleHomeInteraction({ interaction, config, client, logger, homeKey, homeEntry }) {
+    if (!interaction.isStringSelectMenu()) return;
+    const [, , action] = interaction.customId.split(':');
+    const guildOptions = homeEntry?.guildOptions ?? await collectManageableGuilds({ client, userId: interaction.user.id });
+
+    if (action === 'loggingServer') {
+        const choice = interaction.values?.[0] ?? null;
+        if (choice === '__clear__') {
+            delete config.loggingServerId;
+        } else if (choice && choice !== 'noop') {
+            config.loggingServerId = choice;
+            config.mainServerIds = sanitizeIdArray((config.mainServerIds || []).filter(id => id !== choice));
+        }
+        saveConfig(config, logger);
+
+        const view = await buildHomeView({ client, config, guildOptions });
+        const message = await interaction.update(view);
+        panelStore.set(homeKey, { message, guildOptions, view: 'home' });
+
+        const loggingKey = panelKey(interaction.user?.id, 'logging');
+        const loggingEntry = panelStore.get(loggingKey);
+        if (loggingEntry) {
+            loggingEntry.availableGuildIds = config.mainServerIds;
+            panelStore.set(loggingKey, loggingEntry);
+        }
+        return;
+    }
+
+    if (action === 'mainServers') {
+        const selections = (interaction.values ?? []).map(String).filter(v => v && v !== 'noop');
+        const filtered = selections.filter(id => id !== config.loggingServerId);
+        config.mainServerIds = sanitizeIdArray(filtered);
+        saveConfig(config, logger);
+
+        const view = await buildHomeView({ client, config, guildOptions });
+        const message = await interaction.update(view);
+        panelStore.set(homeKey, { message, guildOptions, view: 'home' });
+
+        const loggingKey = panelKey(interaction.user?.id, 'logging');
+        const welcomeKey = panelKey(interaction.user?.id, 'welcome');
+        const loggingEntry = panelStore.get(loggingKey);
+        if (loggingEntry) {
+            loggingEntry.availableGuildIds = config.mainServerIds;
+            if (loggingEntry.guildId && !config.mainServerIds.includes(loggingEntry.guildId)) {
+                loggingEntry.guildId = config.mainServerIds[0] ?? null;
+                loggingEntry.mode = 'default';
+            }
+            panelStore.set(loggingKey, loggingEntry);
+        }
+        const welcomeEntry = panelStore.get(welcomeKey);
+        if (welcomeEntry) {
+            welcomeEntry.availableGuildIds = config.mainServerIds.filter(id => id !== config.loggingServerId);
+            if (welcomeEntry.guildId && !welcomeEntry.availableGuildIds.includes(welcomeEntry.guildId)) {
+                welcomeEntry.guildId = welcomeEntry.availableGuildIds[0] ?? null;
+                welcomeEntry.mode = 'default';
+            }
+            panelStore.set(welcomeKey, welcomeEntry);
+        }
+        return;
+    }
+
+    if (action === 'module') {
+        const target = interaction.values?.[0];
+        if (!target) {
+            await interaction.deferUpdate().catch(() => {});
+            return;
+        }
+
+        const userId = interaction.user?.id;
+        const moduleKey = panelKey(userId, target);
+        panelStore.delete(moduleKey);
+
+        if (target === 'logging') {
+            const available = config.mainServerIds;
+            const initialId = available.find(id => id) ?? null;
+            const guild = initialId ? await fetchGuild(client, initialId) : null;
+            const view = await buildLoggingView({ config, client, guild, mode: 'default', context: {} });
+            const message = await interaction.update(view);
+            panelStore.set(moduleKey, {
+                message,
+                guildId: guild?.id ?? initialId ?? null,
+                mode: 'default',
+                context: {},
+                availableGuildIds: available
+            });
+            panelStore.set(homeKey, { message, guildOptions, view: 'module', module: 'logging' });
+            return;
+        }
+
+        if (target === 'welcome') {
+            const available = config.mainServerIds.filter(id => id !== config.loggingServerId);
+            const initialId = available.find(id => id) ?? null;
+            const guild = initialId ? await fetchGuild(client, initialId) : null;
+            const view = await buildWelcomeView({ config, client, guild, mode: 'default', context: {} });
+            const message = await interaction.update(view);
+            panelStore.set(moduleKey, {
+                message,
+                guildId: guild?.id ?? initialId ?? null,
+                mode: 'default',
+                context: {},
+                availableGuildIds: available
+            });
+            panelStore.set(homeKey, { message, guildOptions, view: 'module', module: 'welcome' });
+            return;
+        }
+
+        if (target === 'autobouncer') {
+            const view = await buildAutobouncerView({ config, client });
+            const message = await interaction.update(view);
+            panelStore.set(moduleKey, { message, guildId: null, mode: 'default', context: {} });
+            panelStore.set(homeKey, { message, guildOptions, view: 'module', module: 'autobouncer' });
+            return;
+        }
+    }
+}
+
+async function handleLoggingInteraction({ interaction, entry, config, client, logger, key }) {
+    const availableGuildIds = entry?.availableGuildIds ?? config.mainServerIds ?? [];
+    const currentGuildId = entry?.guildId && availableGuildIds.includes(entry.guildId)
+        ? entry.guildId
+        : (availableGuildIds[0] ?? null);
+    const sourceGuild = currentGuildId ? await fetchGuild(client, currentGuildId) : null;
     const baseContext = entry?.context ?? {};
+    const currentMode = entry?.mode ?? 'default';
+
+    const persistState = (message, overrides = {}) => {
+        panelStore.set(key, {
+            message,
+            guildId: overrides.guildId ?? currentGuildId ?? null,
+            mode: overrides.mode ?? currentMode,
+            context: overrides.context ?? baseContext,
+            availableGuildIds
+        });
+    };
 
     if (interaction.isButton()) {
         switch (interaction.customId) {
-            case 'setup:logging:chooseServer': {
-                const view = await buildLoggingView({ config, client, guild: sourceGuild, mode: 'select-server', context: {} });
-                const message = await interaction.update(view);
-                panelStore.set(key, { message, guildId: sourceGuild?.id ?? null, mode: 'select-server', context: {} });
-                return;
-            }
             case 'setup:logging:linkCurrent': {
+                if (!currentGuildId) {
+                    await interaction.reply({ content: 'Select a main server first.', ephemeral: true });
+                    return;
+                }
                 const view = await buildLoggingView({
                     config,
                     client,
                     guild: sourceGuild,
                     mode: 'select-mapping-channel',
-                    context: { sourceGuildId: sourceGuild?.id ?? entry?.guildId ?? null }
+                    context: { sourceGuildId: currentGuildId }
                 });
                 const message = await interaction.update(view);
-                panelStore.set(key, {
-                    message,
-                    guildId: sourceGuild?.id ?? null,
+                persistState(message, {
                     mode: 'select-mapping-channel',
-                    context: { sourceGuildId: sourceGuild?.id ?? entry?.guildId ?? null }
+                    context: { sourceGuildId: currentGuildId }
                 });
                 return;
             }
             case 'setup:logging:removeCurrent': {
-                if (sourceGuild?.id) {
-                    delete config.mapping[sourceGuild.id];
-                    if (config.loggingWebhookMeta[sourceGuild.id]) {
-                        delete config.loggingWebhookMeta[sourceGuild.id];
+                if (currentGuildId) {
+                    delete config.mapping[currentGuildId];
+                    if (config.loggingWebhookMeta[currentGuildId]) {
+                        delete config.loggingWebhookMeta[currentGuildId];
                     }
                     saveConfig(config, logger);
                 }
                 const view = await buildLoggingView({ config, client, guild: sourceGuild, mode: 'default', context: {} });
                 const message = await interaction.update(view);
-                panelStore.set(key, { message, guildId: sourceGuild?.id ?? null, mode: 'default', context: {} });
+                persistState(message, { mode: 'default', context: {} });
                 await interaction.followUp({ content: 'Mapping removed for this server.', ephemeral: true }).catch(() => {});
                 return;
             }
             case 'setup:logging:manageChannels': {
                 const view = await buildLoggingView({ config, client, guild: sourceGuild, mode: 'choose-category', context: {} });
                 const message = await interaction.update(view);
-                panelStore.set(key, { message, guildId: sourceGuild?.id ?? null, mode: 'choose-category', context: {} });
+                persistState(message, { mode: 'choose-category', context: {} });
                 return;
             }
             case 'setup:logging:manageExclusions': {
                 const view = await buildLoggingView({ config, client, guild: sourceGuild, mode: 'manage-exclusions', context: {} });
                 const message = await interaction.update(view);
-                panelStore.set(key, { message, guildId: sourceGuild?.id ?? null, mode: 'manage-exclusions', context: {} });
+                persistState(message, { mode: 'manage-exclusions', context: {} });
                 return;
             }
             case 'setup:logging:toggleBots': {
                 config.forwardBots = !config.forwardBots;
                 saveConfig(config, logger);
-                const view = await buildLoggingView({ config, client, guild: sourceGuild, mode: entry?.mode ?? 'default', context: baseContext });
+                const view = await buildLoggingView({ config, client, guild: sourceGuild, mode: currentMode, context: baseContext });
                 const message = await interaction.update(view);
-                panelStore.set(key, { message, guildId: sourceGuild?.id ?? null, mode: entry?.mode ?? 'default', context: baseContext });
+                persistState(message, { mode: currentMode, context: baseContext });
                 await interaction.followUp({ content: `Forwarding bot messages is now ${config.forwardBots ? 'enabled' : 'disabled'}.`, ephemeral: true }).catch(() => {});
                 return;
             }
@@ -308,7 +621,7 @@ async function handleLoggingInteraction({ interaction, entry, config, client, lo
             case 'setup:logging:refresh': {
                 const view = await buildLoggingView({ config, client, guild: sourceGuild, mode: 'default', context: {} });
                 const message = await interaction.update(view);
-                panelStore.set(key, { message, guildId: sourceGuild?.id ?? null, mode: 'default', context: {} });
+                persistState(message, { mode: 'default', context: {} });
                 return;
             }
             default:
@@ -319,33 +632,34 @@ async function handleLoggingInteraction({ interaction, entry, config, client, lo
     if (interaction.isStringSelectMenu()) {
         const parts = interaction.customId.split(':');
         switch (parts[2]) {
-            case 'setServer': {
+            case 'selectSource': {
                 const choice = interaction.values?.[0] ?? null;
-                if (choice === '__clear__') {
-                    delete config.loggingServerId;
-                } else if (choice) {
-                    config.loggingServerId = choice;
-                }
-                saveConfig(config, logger);
-                const view = await buildLoggingView({ config, client, guild: sourceGuild, mode: 'default', context: {} });
+                const nextGuildId = choice && choice !== 'noop' ? choice : null;
+                const nextGuild = nextGuildId ? await fetchGuild(client, nextGuildId) : null;
+                const view = await buildLoggingView({ config, client, guild: nextGuild, mode: 'default', context: {} });
                 const message = await interaction.update(view);
-                panelStore.set(key, { message, guildId: sourceGuild?.id ?? null, mode: 'default', context: {} });
-                await interaction.followUp({ content: choice === '__clear__' ? 'Logging server cleared.' : `Logging server set to ${choice}.`, ephemeral: true }).catch(() => {});
+                panelStore.set(key, {
+                    message,
+                    guildId: nextGuild?.id ?? nextGuildId ?? null,
+                    mode: 'default',
+                    context: {},
+                    availableGuildIds
+                });
                 return;
             }
             case 'createWebhook': {
                 const targetChannelId = interaction.values?.[0];
-                const sourceGuildId = parts[3] || sourceGuild?.id;
+                const sourceGuildId = parts[3] || currentGuildId;
                 if (!targetChannelId || !sourceGuildId) {
                     const view = await buildLoggingView({ config, client, guild: sourceGuild, mode: 'default', context: {} });
                     const message = await interaction.update(view);
-                    panelStore.set(key, { message, guildId: sourceGuild?.id ?? null, mode: 'default', context: {} });
+                    persistState(message, { mode: 'default', context: {} });
                     return;
                 }
                 const result = await linkGuildToChannel({ config, client, logger, sourceGuildId, channelId: targetChannelId });
-                const view = await buildLoggingView({ config, client, guild: sourceGuild, mode: 'default', context: {} });
+                const view = await buildLoggingView({ config, client, guild: await fetchGuild(client, sourceGuildId), mode: 'default', context: {} });
                 const message = await interaction.update(view);
-                panelStore.set(key, { message, guildId: sourceGuild?.id ?? null, mode: 'default', context: {} });
+                persistState(message, { guildId: sourceGuildId, mode: 'default', context: {} });
                 const reply = result.ok ? `Linked **${result.sourceName}** to <#${targetChannelId}>.` : result.error;
                 await interaction.followUp({ content: reply, ephemeral: true }).catch(() => {});
                 return;
@@ -355,12 +669,12 @@ async function handleLoggingInteraction({ interaction, entry, config, client, lo
                 if (!category) {
                     const view = await buildLoggingView({ config, client, guild: sourceGuild, mode: 'default', context: {} });
                     const message = await interaction.update(view);
-                    panelStore.set(key, { message, guildId: sourceGuild?.id ?? null, mode: 'default', context: {} });
+                    persistState(message, { mode: 'default', context: {} });
                     return;
                 }
                 const view = await buildLoggingView({ config, client, guild: sourceGuild, mode: 'select-category-channel', context: { category } });
                 const message = await interaction.update(view);
-                panelStore.set(key, { message, guildId: sourceGuild?.id ?? null, mode: 'select-category-channel', context: { category } });
+                persistState(message, { mode: 'select-category-channel', context: { category } });
                 return;
             }
             case 'setCategory': {
@@ -369,7 +683,7 @@ async function handleLoggingInteraction({ interaction, entry, config, client, lo
                 if (!category) {
                     const view = await buildLoggingView({ config, client, guild: sourceGuild, mode: 'default', context: {} });
                     const message = await interaction.update(view);
-                    panelStore.set(key, { message, guildId: sourceGuild?.id ?? null, mode: 'default', context: {} });
+                    persistState(message, { mode: 'default', context: {} });
                     return;
                 }
                 if (channelId === '__clear__') {
@@ -380,31 +694,31 @@ async function handleLoggingInteraction({ interaction, entry, config, client, lo
                 saveConfig(config, logger);
                 const view = await buildLoggingView({ config, client, guild: sourceGuild, mode: 'default', context: {} });
                 const message = await interaction.update(view);
-                panelStore.set(key, { message, guildId: sourceGuild?.id ?? null, mode: 'default', context: {} });
+                persistState(message, { mode: 'default', context: {} });
                 await interaction.followUp({ content: channelId === '__clear__' ? `Cleared channel for **${category}**.` : `Channel for **${category}** set.`, ephemeral: true }).catch(() => {});
                 return;
             }
             case 'excludeChannels': {
                 const channels = interaction.values?.map(String) ?? [];
-                if (sourceGuild?.id) {
-                    config.excludeChannels[sourceGuild.id] = channels;
+                if (currentGuildId) {
+                    config.excludeChannels[currentGuildId] = channels;
                     saveConfig(config, logger);
                 }
                 const view = await buildLoggingView({ config, client, guild: sourceGuild, mode: 'manage-exclusions', context: {} });
                 const message = await interaction.update(view);
-                panelStore.set(key, { message, guildId: sourceGuild?.id ?? null, mode: 'manage-exclusions', context: {} });
+                persistState(message, { mode: 'manage-exclusions', context: {} });
                 await interaction.followUp({ content: `Excluded ${channels.length} channel(s).`, ephemeral: true }).catch(() => {});
                 return;
             }
             case 'excludeCategories': {
                 const categories = interaction.values?.map(String) ?? [];
-                if (sourceGuild?.id) {
-                    config.excludeCategories[sourceGuild.id] = categories;
+                if (currentGuildId) {
+                    config.excludeCategories[currentGuildId] = categories;
                     saveConfig(config, logger);
                 }
                 const view = await buildLoggingView({ config, client, guild: sourceGuild, mode: 'manage-exclusions', context: {} });
                 const message = await interaction.update(view);
-                panelStore.set(key, { message, guildId: sourceGuild?.id ?? null, mode: 'manage-exclusions', context: {} });
+                persistState(message, { mode: 'manage-exclusions', context: {} });
                 await interaction.followUp({ content: `Excluded ${categories.length} categor${categories.length === 1 ? 'y' : 'ies'}.`, ephemeral: true }).catch(() => {});
                 return;
             }
@@ -426,9 +740,9 @@ async function handleLoggingInteraction({ interaction, entry, config, client, lo
             await interaction.reply({ content: `Sample rate updated to ${value}.`, ephemeral: true });
             if (entry?.message) {
                 try {
-                    const view = await buildLoggingView({ config, client, guild: sourceGuild, mode: entry?.mode ?? 'default', context: entry?.context ?? {} });
+                    const view = await buildLoggingView({ config, client, guild: sourceGuild, mode: currentMode, context: baseContext });
                     const message = await entry.message.edit(view);
-                    panelStore.set(key, { message, guildId: sourceGuild?.id ?? null, mode: entry?.mode ?? 'default', context: entry?.context ?? {} });
+                    persistState(message, { mode: currentMode, context: baseContext });
                 } catch {}
             }
         }
@@ -485,24 +799,20 @@ async function linkGuildToChannel({ config, client, logger, sourceGuildId, chann
 }
 
 async function buildLoggingView({ config, client, guild, mode, context }) {
-    const sourceGuild = guild ?? null;
     const loggingServerId = config.loggingServerId ?? null;
-    const loggingGuild = await fetchGuild(client, loggingServerId);
+    const loggingGuild = loggingServerId ? await fetchGuild(client, loggingServerId) : null;
+    const selectedGuild = guild ?? null;
+    const selectedGuildId = selectedGuild?.id ?? context?.sourceGuildId ?? null;
 
     const mapping = config.mapping || {};
     const meta = config.loggingWebhookMeta || {};
     const excludeChannels = config.excludeChannels || {};
     const excludeCategories = config.excludeCategories || {};
-
-    const sourceId = sourceGuild?.id ?? null;
-    const webhookUrl = sourceId ? mapping[sourceId] : null;
-    const webhookMeta = sourceId ? meta[sourceId] : null;
-    const excludedChan = sourceId ? (excludeChannels[sourceId] || []) : [];
-    const excludedCats = sourceId ? (excludeCategories[sourceId] || []) : [];
+    const autobanChannelId = config.autoban?.notifyChannelId ?? null;
 
     const embed = new EmbedBuilder()
     .setTitle('Logging module setup')
-    .setDescription('Configure the centralized logging server and forwarding rules.')
+    .setDescription('Link each main server to a logging channel and manage exclusions from anywhere.')
     .addFields(
         {
             name: 'Logging server',
@@ -510,22 +820,44 @@ async function buildLoggingView({ config, client, guild, mode, context }) {
             inline: false
         },
         {
-            name: 'This server mapping',
-            value: webhookUrl
-                ? `Linked to ${formatChannel(loggingGuild, webhookMeta?.channelId)}\n${truncateWebhook(webhookUrl)}`
-                : 'Not linked yet.',
+            name: 'Selected main server',
+            value: selectedGuild ? `${selectedGuild.name} (${selectedGuild.id})` : 'Choose a server using the selector below.',
             inline: false
-        },
-        {
-            name: 'Excluded channels',
-            value: excludedChan.length ? excludedChan.map(id => formatChannel(sourceGuild, id)).slice(0, 5).join('\n') + (excludedChan.length > 5 ? `\n… ${excludedChan.length - 5} more` : '') : 'None',
-            inline: true
-        },
-        {
-            name: 'Excluded categories',
-            value: excludedCats.length ? excludedCats.map(id => formatCategory(sourceGuild, id)).slice(0, 5).join('\n') + (excludedCats.length > 5 ? `\n… ${excludedCats.length - 5} more` : '') : 'None',
-            inline: true
-        },
+        }
+    );
+
+    if (selectedGuildId) {
+        const webhookUrl = mapping[selectedGuildId];
+        const webhookMeta = meta[selectedGuildId];
+        const excludedChan = excludeChannels[selectedGuildId] || [];
+        const excludedCats = excludeCategories[selectedGuildId] || [];
+
+        embed.addFields(
+            {
+                name: 'Current mapping',
+                value: webhookUrl
+                    ? `Linked to ${formatChannel(loggingGuild, webhookMeta?.channelId)}\n${truncateWebhook(webhookUrl)}`
+                    : 'Not linked yet.',
+                inline: false
+            },
+            {
+                name: 'Excluded channels',
+                value: excludedChan.length
+                    ? excludedChan.map(id => formatChannel(selectedGuild, id)).slice(0, 5).join('\n') + (excludedChan.length > 5 ? `\n… ${excludedChan.length - 5} more` : '')
+                    : 'None',
+                inline: true
+            },
+            {
+                name: 'Excluded categories',
+                value: excludedCats.length
+                    ? excludedCats.map(id => formatCategory(selectedGuild, id)).slice(0, 5).join('\n') + (excludedCats.length > 5 ? `\n… ${excludedCats.length - 5} more` : '')
+                    : 'None',
+                inline: true
+            }
+        );
+    }
+
+    embed.addFields(
         {
             name: 'Forward bot messages',
             value: config.forwardBots ? '✅ Enabled' : '🚫 Disabled',
@@ -537,27 +869,60 @@ async function buildLoggingView({ config, client, guild, mode, context }) {
             inline: true
         },
         {
-            name: 'Logging channels',
+            name: 'Logging channel categories',
             value: formatLoggingChannels(loggingGuild, config.loggingChannels || {}),
             inline: false
         }
     );
 
+    const components = [];
+
+    const availableSources = (config.mainServerIds || []).filter(id => id);
+    const sourceOptions = [];
+    for (const id of availableSources.slice(0, 24)) {
+        const g = client.guilds.cache.get(id) ?? await fetchGuild(client, id);
+        sourceOptions.push({
+            label: truncateName(g?.name ?? id, 100),
+            description: `ID: ${id}`.slice(0, 100),
+            value: id,
+            default: id === selectedGuildId
+        });
+    }
+    if (selectedGuildId && !sourceOptions.find(opt => opt.value === selectedGuildId)) {
+        const g = client.guilds.cache.get(selectedGuildId) ?? await fetchGuild(client, selectedGuildId);
+        sourceOptions.unshift({
+            label: truncateName(g?.name ?? selectedGuildId, 100),
+            description: `ID: ${selectedGuildId}`.slice(0, 100),
+            value: selectedGuildId,
+            default: true
+        });
+    }
+
+    const sourceMenu = new StringSelectMenuBuilder()
+    .setCustomId('setup:logging:selectSource')
+    .setPlaceholder(availableSources.length ? 'Select a main server…' : 'Add main servers on the overview page')
+    .setMinValues(1)
+    .setMaxValues(1)
+    .setDisabled(!availableSources.length);
+
+    if (sourceOptions.length) {
+        sourceMenu.addOptions(sourceOptions);
+    } else {
+        sourceMenu.addOptions({ label: 'No main servers configured', value: 'noop', default: true });
+    }
+    components.push(new ActionRowBuilder().addComponents(sourceMenu));
+
     const buttonsPrimary = new ActionRowBuilder().addComponents(
-        new ButtonBuilder()
-        .setCustomId('setup:logging:chooseServer')
-        .setLabel('Select logging server')
-        .setStyle(ButtonStyle.Primary),
         new ButtonBuilder()
         .setCustomId('setup:logging:linkCurrent')
         .setLabel('Link this server')
         .setStyle(ButtonStyle.Primary)
-        .setDisabled(!sourceId || !loggingGuild),
+        .setDisabled(!selectedGuildId || !loggingGuild),
         new ButtonBuilder()
         .setCustomId('setup:logging:removeCurrent')
         .setLabel('Remove mapping')
         .setStyle(ButtonStyle.Danger)
-        .setDisabled(!sourceId || !webhookUrl),
+        .setDisabled(!selectedGuildId || !mapping[selectedGuildId]),
         new ButtonBuilder()
         .setCustomId('setup:logging:manageChannels')
         .setLabel('Set logging channels')
@@ -567,7 +932,7 @@ async function buildLoggingView({ config, client, guild, mode, context }) {
         .setCustomId('setup:logging:manageExclusions')
         .setLabel('Manage exclusions')
         .setStyle(ButtonStyle.Secondary)
-        .setDisabled(!sourceGuild)
+        .setDisabled(!selectedGuildId)
     );
 
     const buttonsSecondary = new ActionRowBuilder().addComponents(
@@ -585,32 +950,13 @@ async function buildLoggingView({ config, client, guild, mode, context }) {
         .setStyle(ButtonStyle.Secondary)
     );
 
-    const components = [buttonsPrimary, buttonsSecondary];
-
-    if (mode === 'select-server') {
-        const guildOptions = Array.from(client.guilds.cache.values())
-        .sort((a, b) => a.name.localeCompare(b.name))
-        .slice(0, 24)
-        .map(g => ({
-            label: truncateName(g.name, 100),
-            description: `ID: ${g.id}`,
-            value: g.id,
-            default: g.id === loggingServerId
-        }));
-        guildOptions.push({ label: 'Clear logging server', value: '__clear__', description: 'Stop forwarding to a logging server.' });
-        const menu = new StringSelectMenuBuilder()
-        .setCustomId('setup:logging:setServer')
-        .setPlaceholder('Select logging server…')
-        .setMinValues(1)
-        .setMaxValues(1)
-        .addOptions(guildOptions);
-        components.push(new ActionRowBuilder().addComponents(menu));
-    }
+    components.push(buttonsPrimary);
+    components.push(buttonsSecondary);
 
     if (mode === 'select-mapping-channel') {
-        const channels = await collectTextChannels(loggingGuild);
+        const channels = (await collectTextChannels(loggingGuild)).filter(ch => ch.id !== autobanChannelId);
         const menu = new StringSelectMenuBuilder()
-        .setCustomId(`setup:logging:createWebhook:${context?.sourceGuildId ?? sourceId ?? 'unknown'}`)
+        .setCustomId(`setup:logging:createWebhook:${context?.sourceGuildId ?? selectedGuildId ?? 'unknown'}`)
         .setPlaceholder(loggingGuild ? 'Select a logging channel…' : 'Set logging server first')
         .setMinValues(1)
         .setMaxValues(1)
@@ -621,7 +967,7 @@ async function buildLoggingView({ config, client, guild, mode, context }) {
                 label: truncateName(ch.name, 100),
                 description: `#${ch.name} — ID ${ch.id}`.slice(0, 100),
                 value: ch.id,
-                default: webhookMeta?.channelId === ch.id
+                default: meta[context?.sourceGuildId ?? selectedGuildId]?.channelId === ch.id
             })));
         } else {
             menu.addOptions({ label: 'No available text channels', value: 'none', default: true });
@@ -647,7 +993,7 @@ async function buildLoggingView({ config, client, guild, mode, context }) {
 
     if (mode === 'select-category-channel') {
         const category = context?.category;
-        const channels = await collectTextChannels(loggingGuild);
+        const channels = (await collectTextChannels(loggingGuild)).filter(ch => ch.id !== autobanChannelId);
         const menu = new StringSelectMenuBuilder()
         .setCustomId(`setup:logging:setCategory:${category}`)
         .setPlaceholder(loggingGuild ? `Select channel for ${category}` : 'Set logging server first')
@@ -670,35 +1016,47 @@ async function buildLoggingView({ config, client, guild, mode, context }) {
     }
 
     if (mode === 'manage-exclusions') {
-        const sourceChannels = await collectTextChannels(sourceGuild);
+        const sourceChannels = await collectTextChannels(selectedGuild);
         const channelMenu = new StringSelectMenuBuilder()
         .setCustomId('setup:logging:excludeChannels')
         .setPlaceholder('Select channels to exclude…')
         .setMinValues(0)
-        .setMaxValues(Math.min(25, sourceChannels.length || 1))
-        .addOptions(sourceChannels.slice(0, 25).map((ch) => ({
-            label: truncateName(ch.name, 100),
-            description: `#${ch.name}`.slice(0, 100),
-            value: ch.id,
-            default: excludedChan.includes(ch.id)
-        })));
+        .setMaxValues(Math.min(25, sourceChannels.length || 1));
 
-        const categories = await collectCategories(sourceGuild);
+        if (sourceChannels.length) {
+            channelMenu.addOptions(sourceChannels.slice(0, 25).map((ch) => ({
+                label: truncateName(ch.name, 100),
+                description: `#${ch.name}`.slice(0, 100),
+                value: ch.id,
+                default: (excludeChannels[selectedGuildId] || []).includes(ch.id)
+            })));
+        } else {
+            channelMenu.addOptions({ label: 'No text channels found', value: 'noop', default: true });
+        }
+
+        const categories = await collectCategories(selectedGuild);
         const categoryMenu = new StringSelectMenuBuilder()
         .setCustomId('setup:logging:excludeCategories')
         .setPlaceholder('Select categories to exclude…')
         .setMinValues(0)
-        .setMaxValues(Math.min(25, categories.length || 1))
-        .addOptions(categories.slice(0, 25).map((cat) => ({
-            label: truncateName(cat.name, 100),
-            description: cat.id,
-            value: cat.id,
-            default: excludedCats.includes(cat.id)
-        })));
+        .setMaxValues(Math.min(25, categories.length || 1));
+
+        if (categories.length) {
+            categoryMenu.addOptions(categories.slice(0, 25).map((cat) => ({
+                label: truncateName(cat.name, 100),
+                description: cat.id,
+                value: cat.id,
+                default: (excludeCategories[selectedGuildId] || []).includes(cat.id)
+            })));
+        } else {
+            categoryMenu.addOptions({ label: 'No categories found', value: 'noop', default: true });
+        }
 
         components.push(new ActionRowBuilder().addComponents(channelMenu));
         components.push(new ActionRowBuilder().addComponents(categoryMenu));
     }
+
+    appendHomeButtonRow(components);
 
     return { embeds: [embed], components };
 }
@@ -775,40 +1133,69 @@ async function collectCategories(guild) {
     }
 }
 
-async function handleWelcomeInteraction({ interaction, entry, config, client, key, guild, logger }) {
-    const sourceGuild = guild ?? (entry?.guildId ? await fetchGuild(client, entry.guildId) : null);
+function appendHomeButtonRow(components) {
+    components.push(new ActionRowBuilder().addComponents(
+        new ButtonBuilder()
+        .setCustomId('setup:navigate:home')
+        .setLabel('⬅ Back to overview')
+        .setStyle(ButtonStyle.Secondary)
+    ));
+}
+
+async function handleWelcomeInteraction({ interaction, entry, config, client, key, logger }) {
+    const availableGuildIds = entry?.availableGuildIds ?? config.mainServerIds.filter(id => id !== config.loggingServerId);
+    const currentGuildId = entry?.guildId && availableGuildIds.includes(entry.guildId)
+        ? entry.guildId
+        : (availableGuildIds[0] ?? null);
+    const targetGuild = currentGuildId ? await fetchGuild(client, currentGuildId) : null;
+
+    const ensureWelcomeEntry = () => {
+        if (!currentGuildId) return null;
+        if (!config.welcome[currentGuildId]) {
+            config.welcome[currentGuildId] = { channelId: null, mentions: {} };
+        }
+        const entryCfg = config.welcome[currentGuildId];
+        if (!entryCfg.mentions || typeof entryCfg.mentions !== 'object') {
+            entryCfg.mentions = {};
+        }
+        return entryCfg;
+    };
 
     if (interaction.isButton()) {
         const target = interaction.customId.split(':')[2];
+        if (!currentGuildId) {
+            await interaction.reply({ content: 'Select a server to configure first.', ephemeral: true });
+            return;
+        }
         switch (target) {
             case 'setWelcome': {
-                const view = await buildWelcomeView({ config, guild: sourceGuild, mode: 'select', context: { target: 'welcome' } });
+                const view = await buildWelcomeView({ config, client, guild: targetGuild, mode: 'select', context: { target: 'welcome', availableGuildIds } });
                 const message = await interaction.update(view);
-                panelStore.set(key, { message, guildId: sourceGuild?.id ?? null, mode: 'select', context: { target: 'welcome' } });
+                panelStore.set(key, { message, guildId: currentGuildId, mode: 'select', context: { target: 'welcome' }, availableGuildIds });
                 return;
             }
             case 'setRules': {
-                const view = await buildWelcomeView({ config, guild: sourceGuild, mode: 'select', context: { target: 'rules' } });
+                const view = await buildWelcomeView({ config, client, guild: targetGuild, mode: 'select', context: { target: 'rules', availableGuildIds } });
                 const message = await interaction.update(view);
-                panelStore.set(key, { message, guildId: sourceGuild?.id ?? null, mode: 'select', context: { target: 'rules' } });
+                panelStore.set(key, { message, guildId: currentGuildId, mode: 'select', context: { target: 'rules' }, availableGuildIds });
                 return;
             }
             case 'setRoles': {
-                const view = await buildWelcomeView({ config, guild: sourceGuild, mode: 'select', context: { target: 'roles' } });
+                const view = await buildWelcomeView({ config, client, guild: targetGuild, mode: 'select', context: { target: 'roles', availableGuildIds } });
                 const message = await interaction.update(view);
-                panelStore.set(key, { message, guildId: sourceGuild?.id ?? null, mode: 'select', context: { target: 'roles' } });
+                panelStore.set(key, { message, guildId: currentGuildId, mode: 'select', context: { target: 'roles' }, availableGuildIds });
                 return;
             }
             case 'setVerify': {
-                const view = await buildWelcomeView({ config, guild: sourceGuild, mode: 'select', context: { target: 'verify' } });
+                const view = await buildWelcomeView({ config, client, guild: targetGuild, mode: 'select', context: { target: 'verify', availableGuildIds } });
                 const message = await interaction.update(view);
-                panelStore.set(key, { message, guildId: sourceGuild?.id ?? null, mode: 'select', context: { target: 'verify' } });
+                panelStore.set(key, { message, guildId: currentGuildId, mode: 'select', context: { target: 'verify' }, availableGuildIds });
                 return;
             }
             case 'refresh': {
-                const view = await buildWelcomeView({ config, guild: sourceGuild, mode: 'default', context: {} });
+                const view = await buildWelcomeView({ config, client, guild: targetGuild, mode: 'default', context: { availableGuildIds } });
                 const message = await interaction.update(view);
-                panelStore.set(key, { message, guildId: sourceGuild?.id ?? null, mode: 'default', context: {} });
+                panelStore.set(key, { message, guildId: currentGuildId, mode: 'default', context: {}, availableGuildIds });
                 return;
             }
             default:
@@ -817,67 +1204,130 @@ async function handleWelcomeInteraction({ interaction, entry, config, client, ke
     }
 
     if (interaction.isStringSelectMenu()) {
-        const target = interaction.customId.split(':')[3];
-        const selection = interaction.values?.[0];
-        if (!target) {
-            const view = await buildWelcomeView({ config, guild: sourceGuild, mode: 'default', context: {} });
+        const parts = interaction.customId.split(':');
+        const action = parts[2];
+        if (action === 'selectGuild') {
+            const choice = interaction.values?.[0] ?? null;
+            const nextGuildId = choice && choice !== 'noop' ? choice : null;
+            const guild = nextGuildId ? await fetchGuild(client, nextGuildId) : null;
+            const view = await buildWelcomeView({ config, client, guild, mode: 'default', context: { availableGuildIds } });
             const message = await interaction.update(view);
-            panelStore.set(key, { message, guildId: sourceGuild?.id ?? null, mode: 'default', context: {} });
+            panelStore.set(key, { message, guildId: guild?.id ?? nextGuildId ?? null, mode: 'default', context: {}, availableGuildIds });
             return;
         }
-        if (target === 'welcome') {
-            config.welcome.channelId = selection === '__clear__' ? null : selection;
-        } else {
-            if (!config.welcome.mentions) config.welcome.mentions = {};
-            if (selection === '__clear__') {
-                delete config.welcome.mentions[target];
-            } else {
-                config.welcome.mentions[target] = selection;
+
+        if (action === 'apply') {
+            if (!currentGuildId) {
+                const view = await buildWelcomeView({ config, client, guild: null, mode: 'default', context: { availableGuildIds } });
+                const message = await interaction.update(view);
+                panelStore.set(key, { message, guildId: null, mode: 'default', context: {}, availableGuildIds });
+                return;
             }
+            const target = parts[3];
+            const choice = interaction.values?.[0] ?? null;
+            const entryCfg = ensureWelcomeEntry();
+            if (!entryCfg) {
+                const view = await buildWelcomeView({ config, client, guild: targetGuild, mode: 'default', context: { availableGuildIds } });
+                const message = await interaction.update(view);
+                panelStore.set(key, { message, guildId: currentGuildId, mode: 'default', context: {}, availableGuildIds });
+                return;
+            }
+
+            if (target === 'welcome') {
+                entryCfg.channelId = choice === '__clear__' ? null : choice;
+            } else if (['rules', 'roles', 'verify'].includes(target)) {
+                if (choice === '__clear__') {
+                    delete entryCfg.mentions[target];
+                } else if (choice) {
+                    entryCfg.mentions[target] = choice;
+                }
+            }
+            saveConfig(config, logger);
+            const view = await buildWelcomeView({ config, client, guild: targetGuild, mode: 'default', context: { availableGuildIds } });
+            const message = await interaction.update(view);
+            panelStore.set(key, { message, guildId: currentGuildId, mode: 'default', context: {}, availableGuildIds });
+            await interaction.followUp({ content: 'Welcome configuration updated.', ephemeral: true }).catch(() => {});
+            return;
         }
-        saveConfig(config, logger);
-        const view = await buildWelcomeView({ config, guild: sourceGuild, mode: 'default', context: {} });
-        const message = await interaction.update(view);
-        panelStore.set(key, { message, guildId: sourceGuild?.id ?? null, mode: 'default', context: {} });
-        await interaction.followUp({ content: 'Welcome configuration updated.', ephemeral: true }).catch(() => {});
     }
 }
 
-async function buildWelcomeView({ config, guild, mode, context }) {
-    const welcomeCfg = config.welcome || {};
-    const mentionMap = welcomeCfg.mentions || {};
+async function buildWelcomeView({ config, client, guild, mode, context }) {
+    const availableGuildIds = context?.availableGuildIds ?? config.mainServerIds.filter(id => id !== config.loggingServerId);
+    const selectedGuild = guild ?? null;
+    const selectedGuildId = selectedGuild?.id ?? null;
+    const welcomeEntry = selectedGuildId ? config.welcome?.[selectedGuildId] ?? { channelId: null, mentions: {} } : { channelId: null, mentions: {} };
+    const mentionMap = welcomeEntry.mentions || {};
 
     const embed = new EmbedBuilder()
     .setTitle('Welcome card setup')
-    .setDescription('Select where welcome and goodbye messages should post.')
+    .setDescription('Choose which channels power the welcome experience for each main server.')
     .addFields(
-        { name: 'Welcome channel', value: formatChannel(guild, welcomeCfg.channelId) },
-        { name: 'Rules mention', value: mentionToDisplay(guild, mentionMap.rules) },
-        { name: 'Roles mention', value: mentionToDisplay(guild, mentionMap.roles) },
-        { name: 'Verify mention', value: mentionToDisplay(guild, mentionMap.verify) }
+        { name: 'Selected server', value: selectedGuild ? `${selectedGuild.name} (${selectedGuild.id})` : 'Select a server using the menu below.', inline: false },
+        { name: 'Welcome channel', value: selectedGuild ? formatChannel(selectedGuild, welcomeEntry.channelId) : 'Not configured', inline: false },
+        { name: 'Rules mention', value: selectedGuild ? mentionToDisplay(selectedGuild, mentionMap.rules) : 'Not configured', inline: true },
+        { name: 'Roles mention', value: selectedGuild ? mentionToDisplay(selectedGuild, mentionMap.roles) : 'Not configured', inline: true },
+        { name: 'Verify mention', value: selectedGuild ? mentionToDisplay(selectedGuild, mentionMap.verify) : 'Not configured', inline: true }
     );
 
+    const components = [];
+
+    const guildOptions = [];
+    for (const id of availableGuildIds.slice(0, 24)) {
+        const g = client.guilds.cache.get(id) ?? await fetchGuild(client, id);
+        guildOptions.push({
+            label: truncateName(g?.name ?? id, 100),
+            description: `ID: ${id}`.slice(0, 100),
+            value: id,
+            default: id === selectedGuildId
+        });
+    }
+    if (selectedGuildId && !guildOptions.find(opt => opt.value === selectedGuildId)) {
+        const g = client.guilds.cache.get(selectedGuildId) ?? await fetchGuild(client, selectedGuildId);
+        guildOptions.unshift({
+            label: truncateName(g?.name ?? selectedGuildId, 100),
+            description: `ID: ${selectedGuildId}`.slice(0, 100),
+            value: selectedGuildId,
+            default: true
+        });
+    }
+
+    const guildMenu = new StringSelectMenuBuilder()
+    .setCustomId('setup:welcome:selectGuild')
+    .setPlaceholder(availableGuildIds.length ? 'Select a server to configure…' : 'Add main servers on the overview page')
+    .setMinValues(1)
+    .setMaxValues(1)
+    .setDisabled(!availableGuildIds.length);
+
+    if (guildOptions.length) {
+        guildMenu.addOptions(guildOptions);
+    } else {
+        guildMenu.addOptions({ label: 'No eligible servers', value: 'noop', default: true });
+    }
+
+    components.push(new ActionRowBuilder().addComponents(guildMenu));
+
     const buttons = new ActionRowBuilder().addComponents(
-        new ButtonBuilder().setCustomId('setup:welcome:setWelcome').setLabel('Set welcome channel').setStyle(ButtonStyle.Primary).setDisabled(!guild),
-        new ButtonBuilder().setCustomId('setup:welcome:setRules').setLabel('Set rules channel').setStyle(ButtonStyle.Secondary).setDisabled(!guild),
-        new ButtonBuilder().setCustomId('setup:welcome:setRoles').setLabel('Set roles channel').setStyle(ButtonStyle.Secondary).setDisabled(!guild),
-        new ButtonBuilder().setCustomId('setup:welcome:setVerify').setLabel('Set verify channel').setStyle(ButtonStyle.Secondary).setDisabled(!guild),
+        new ButtonBuilder().setCustomId('setup:welcome:setWelcome').setLabel('Set welcome channel').setStyle(ButtonStyle.Primary).setDisabled(!selectedGuild),
+        new ButtonBuilder().setCustomId('setup:welcome:setRules').setLabel('Set rules channel').setStyle(ButtonStyle.Secondary).setDisabled(!selectedGuild),
+        new ButtonBuilder().setCustomId('setup:welcome:setRoles').setLabel('Set roles channel').setStyle(ButtonStyle.Secondary).setDisabled(!selectedGuild),
+        new ButtonBuilder().setCustomId('setup:welcome:setVerify').setLabel('Set verify channel').setStyle(ButtonStyle.Secondary).setDisabled(!selectedGuild),
         new ButtonBuilder().setCustomId('setup:welcome:refresh').setLabel('Refresh').setStyle(ButtonStyle.Secondary)
     );
 
-    const components = [buttons];
+    components.push(buttons);
 
-    if (mode === 'select') {
+    if (mode === 'select' && selectedGuild) {
         const target = context?.target;
-        const channels = await collectTextChannels(guild);
+        const channels = await collectTextChannels(selectedGuild);
         const menu = new StringSelectMenuBuilder()
         .setCustomId(`setup:welcome:apply:${target}`)
         .setPlaceholder('Select a channel…')
         .setMinValues(1)
         .setMaxValues(1)
-        .setDisabled(!guild || channels.length === 0);
+        .setDisabled(channels.length === 0);
 
-        menu.addOptions({ label: 'Clear selection', value: '__clear__', description: 'Remove configured channel.' });
+        menu.addOptions({ label: 'Leave blank', value: '__clear__', description: 'Remove the configured channel.' });
 
         if (channels.length) {
             menu.addOptions(channels.slice(0, 24).map(ch => ({
@@ -885,13 +1335,15 @@ async function buildWelcomeView({ config, guild, mode, context }) {
                 description: `#${ch.name}`.slice(0, 100),
                 value: ch.id,
                 default: target === 'welcome'
-                    ? welcomeCfg.channelId === ch.id
+                    ? welcomeEntry.channelId === ch.id
                     : mentionMap[target] === ch.id
             })));
         }
 
         components.push(new ActionRowBuilder().addComponents(menu));
     }
+
+    appendHomeButtonRow(components);
 
     return { embeds: [embed], components };
 }
@@ -908,7 +1360,7 @@ async function handleAutobouncerInteraction({ interaction, entry, config, key, l
             case 'toggle': {
                 config.autoban.enabled = config.autoban.enabled === false;
                 saveConfig(config, logger);
-                const view = buildAutobouncerView({ config });
+                const view = await buildAutobouncerView({ config, client });
                 const message = await interaction.update(view);
                 panelStore.set(key, { message, guildId: entry?.guildId ?? null, mode: 'default', context: {} });
                 await interaction.followUp({ content: `Autobouncer is now ${config.autoban.enabled === false ? 'disabled' : 'enabled'}.`, ephemeral: true }).catch(() => {});
@@ -933,7 +1385,7 @@ async function handleAutobouncerInteraction({ interaction, entry, config, key, l
                 return;
             }
             case 'refresh': {
-                const view = buildAutobouncerView({ config });
+                const view = await buildAutobouncerView({ config, client });
                 const message = await interaction.update(view);
                 panelStore.set(key, { message, guildId: entry?.guildId ?? null, mode: 'default', context: {} });
                 return;
@@ -953,24 +1405,45 @@ async function handleAutobouncerInteraction({ interaction, entry, config, key, l
             const entryState = panelStore.get(key);
             if (entryState?.message) {
                 try {
-                    const view = buildAutobouncerView({ config });
+                    const view = await buildAutobouncerView({ config, client });
                     const message = await entryState.message.edit(view);
                     panelStore.set(key, { message, guildId: entryState.guildId ?? null, mode: 'default', context: {} });
                 } catch {}
             }
         }
     }
+    if (interaction.isStringSelectMenu()) {
+        const parts = interaction.customId.split(':');
+        if (parts[2] === 'setChannel') {
+            const choice = interaction.values?.[0] ?? null;
+            if (choice === '__clear__') {
+                config.autoban.notifyChannelId = null;
+            } else if (choice && choice !== 'noop') {
+                config.autoban.notifyChannelId = choice;
+            }
+            saveConfig(config, logger);
+            const view = await buildAutobouncerView({ config, client });
+            const message = await interaction.update(view);
+            panelStore.set(key, { message, guildId: entry?.guildId ?? null, mode: 'default', context: {} });
+            await interaction.followUp({ content: choice === '__clear__' ? 'Autobouncer notifications disabled.' : 'Autobouncer notifications channel updated.', ephemeral: true }).catch(() => {});
+        }
+    }
 }
 
-function buildAutobouncerView({ config }) {
+async function buildAutobouncerView({ config, client }) {
     const autobanCfg = config.autoban || {};
     const keywords = Array.isArray(autobanCfg.blockedUsernames) ? autobanCfg.blockedUsernames : [];
+    const loggingGuildId = config.loggingServerId ?? null;
+    const loggingGuild = loggingGuildId ? await fetchGuild(client, loggingGuildId) : null;
+    const channels = loggingGuild ? await collectTextChannels(loggingGuild) : [];
+    const notifyChannelId = autobanCfg.notifyChannelId ?? null;
 
     const embed = new EmbedBuilder()
     .setTitle('Autobouncer setup')
     .setDescription('Manage the keyword list used to automatically remove suspicious accounts.')
     .addFields(
         { name: 'Status', value: autobanCfg.enabled === false ? '🚫 Disabled' : '✅ Enabled', inline: true },
+        { name: 'Logging channel', value: loggingGuild ? formatChannel(loggingGuild, notifyChannelId) : (notifyChannelId ? `<#${notifyChannelId}>` : 'Not configured'), inline: true },
         { name: 'Keywords', value: keywords.length ? keywords.map(k => `• ${k}`).slice(0, 10).join('\n') + (keywords.length > 10 ? `\n… ${keywords.length - 10} more` : '') : 'No keywords configured.', inline: false }
     );
 
@@ -979,8 +1452,30 @@ function buildAutobouncerView({ config }) {
         new ButtonBuilder().setCustomId('setup:autobouncer:editKeywords').setLabel('Edit keywords').setStyle(ButtonStyle.Primary),
         new ButtonBuilder().setCustomId('setup:autobouncer:refresh').setLabel('Refresh').setStyle(ButtonStyle.Secondary)
     );
+    const channelMenu = new StringSelectMenuBuilder()
+    .setCustomId('setup:autobouncer:setChannel')
+    .setPlaceholder(loggingGuild ? 'Select a logging channel…' : 'Set logging server first')
+    .setMinValues(1)
+    .setMaxValues(1)
+    .setDisabled(!loggingGuild || channels.length === 0);
 
-    return { embeds: [embed], components: [buttons] };
+    channelMenu.addOptions({ label: 'Leave blank', value: '__clear__', description: 'Disable autobouncer notifications.' });
+
+    if (channels.length) {
+        channelMenu.addOptions(channels.slice(0, 24).map(ch => ({
+            label: truncateName(ch.name, 100),
+            description: `#${ch.name}`.slice(0, 100),
+            value: ch.id,
+            default: notifyChannelId === ch.id
+        })));
+    } else {
+        channelMenu.addOptions({ label: 'No available channels', value: 'noop', default: true });
+    }
+
+    const components = [buttons, new ActionRowBuilder().addComponents(channelMenu)];
+    appendHomeButtonRow(components);
+
+    return { embeds: [embed], components };
 }
 
 export {

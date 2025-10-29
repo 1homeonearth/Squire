@@ -57,12 +57,16 @@ test('buildLoggingView summarises mapping state and controls', async () => {
     const loggingField = fields.find((f) => f.name === 'Logging server');
     assert.ok(loggingField && loggingField.value.includes('Queen\'s Court'));
 
-    const mappingField = fields.find((f) => f.name === 'This server mapping');
+    const selectedField = fields.find((f) => f.name === 'Selected main server');
+    assert.ok(selectedField && selectedField.value.includes('Source Guild'));
+
+    const mappingField = fields.find((f) => f.name === 'Current mapping');
     assert.ok(mappingField && mappingField.value.includes('<#456>'));
 
-    const buttonsRow = view.components[0];
-    assert.equal(buttonsRow.components.length, 5);
-    assert.equal(buttonsRow.components[0].data.custom_id, 'setup:logging:chooseServer');
-    assert.equal(buttonsRow.components[1].data.custom_id, 'setup:logging:linkCurrent');
+    assert.equal(view.components[0].components[0].data.custom_id, 'setup:logging:selectSource');
+
+    const buttonsRow = view.components[1];
+    assert.equal(buttonsRow.components.length, 4);
+    assert.equal(buttonsRow.components[0].data.custom_id, 'setup:logging:linkCurrent');
 });
 

@@ -9,7 +9,7 @@ The project is written in modern ECMAScript modules on top of [`discord.js` v14]
 - **Logging forwarder** (`src/features/logging-forwarder/`)
   - Mirrors channel activity from each source guild into mapped webhooks in the Queen's Court.
   - Respects per-guild channel/category exclusion lists and a configurable sampling rate.
-  - Fully managed through the `/setup logging` panel — select the logging server, link guilds via dropdowns (with automatic webhook creation), configure exclusions, toggle bot forwards, and adjust sampling without editing files.
+  - Fully managed through the `/setup` overview — designate the logging server, mark the main servers, and from any guild link them to logging channels (Squire creates/updates the webhooks), configure exclusions, toggle bot forwards, and adjust sampling without editing files.
 - **Welcome cards** (`src/features/welcome-cards/`)
   - Builds Mee6-style welcome cards using [Canvacord](https://www.npmjs.com/package/canvacord) with avatar + banner overlays.
   - Posts reminder text pointing newcomers to the rules/roles/verification channels (with configurable channel mentions) and announces departures.
@@ -103,25 +103,28 @@ For CI/CD you can provide a full JSON blob through `AUTOBAN_CONFIG_JSON` to over
 
 ```json
 "welcome": {
-  "channelId": "WELCOME_CHANNEL_ID",
-  "mentions": {
-    "rules": "RULES_CHANNEL_ID",
-    "roles": "ROLES_CHANNEL_ID",
-    "verify": "VERIFY_CHANNEL_ID"
+  "123456789012345678": {
+    "channelId": "WELCOME_CHANNEL_ID",
+    "mentions": {
+      "rules": "RULES_CHANNEL_ID",
+      "roles": "ROLES_CHANNEL_ID",
+      "verify": "VERIFY_CHANNEL_ID"
+    }
   }
 }
 ```
 
-- `channelId` forces the welcome module to post into a specific text channel instead of auto-detecting one by name.
-- `mentions` replaces the placeholder channel names in the welcome reminder text with proper clickable mentions.
+- Each key in the map is a guild ID. The optional `channelId` forces the welcome module to post into a specific text channel instead of auto-detecting one by name.
+- The `mentions` block replaces the placeholder channel names in the welcome reminder text with proper clickable mentions for that guild.
 
 ### In-Discord setup panel
 
-The `/setup` command exposes per-module configuration panes for operators with the **Manage Server** permission:
+The `/setup` command opens an overview for operators with the **Manage Server** permission:
 
-- `/setup logging` — choose the central logging server, link the current guild to a channel via dropdowns (Squire creates/updates the webhook automatically), manage excluded channels/categories, assign dedicated logging channels for different event types, and tune the sampling/bot-forwarding options.
-- `/setup welcome` — pick the welcome/goodbye channel and the reminder jump points (rules, roles, verification) directly from channel lists.
-- `/setup autobouncer` — toggle the module on/off and edit the blocked keyword list in-place via modal text input.
+- Pick the logging server and the list of “main” servers once, then jump into the Logging, Welcome Cards, or Autobouncer modules from any guild.
+- Logging — select which main server to configure, link it to a logging channel inside the logging server, manage excluded channels/categories, assign dedicated logging categories, and tune the sampling/bot-forwarding options.
+- Welcome Cards — choose a target server, set its welcome channel, and pick (or clear) the rules/roles/verify references individually.
+- Autobouncer — toggle the module, edit the blocked keyword list, and choose the logging server channel that receives autobounce notifications.
 
 Every change is persisted to `config.json`, so redeploys and restarts keep the configured state without manual file edits.
 
