@@ -8,6 +8,7 @@ import {
     EmbedBuilder
 } from 'discord.js';
 import { isYouTubeUrl, prepareForNativeEmbed } from '../../lib/youtube.js';
+import { formatPollLines } from '../../lib/poll-format.js';
 
 const RAINBOW = [0xFF0000, 0xFFA500, 0xFFFF00, 0x00FF00, 0x0000FF, 0x800080];
 
@@ -39,6 +40,24 @@ function extractImageLike(msg) {
         if (ej?.url) urls.push(ej.url);
     }
     return [...new Set(urls)];
+}
+
+function formatChannelLabel(channel, fallbackId) {
+    if (!channel) {
+        return fallbackId ? `**#${fallbackId}**` : '';
+    }
+
+    try {
+        const isThread = typeof channel.isThread === 'function' && channel.isThread();
+        if (isThread) {
+            const parentName = channel.parent?.name ?? channel.parentId ?? 'unknown-parent';
+            const threadName = channel.name ?? fallbackId ?? 'unknown-thread';
+            return `**#${parentName} / #${threadName}**`;
+        }
+    } catch {}
+
+    const name = channel.name ?? fallbackId;
+    return name ? `**#${name}**` : '';
 }
 function nextColorGen() {
     const perGuild = new Map(); // guildId -> idx
@@ -150,7 +169,9 @@ export async function init({ client, config, logger }) {
             const hasYouTube = isYouTubeUrl(rawContent);
             const sanitizedContent = hasYouTube ? prepareForNativeEmbed(rawContent) : rawContent;
             const attachmentUrls = Array.from(message.attachments.values()).map(att => att.url).filter(Boolean);
-            const channelLabel = message.channel?.name ? `**${message.channel.name}**` : '';
+            const channelLabel = formatChannelLabel(message.channel, message.channelId);
+            const pollLines = formatPollLines(message.poll);
+            const pollText = pollLines.length ? pollLines.join('\n') : '';
 
             // If NSFW and there are images/gifs, drop the post entirely (avoid empty forwards)
             const media = extractImageLike(message);
@@ -165,12 +186,25 @@ export async function init({ client, config, logger }) {
             const normalizedContent = (sanitizedContent || '').trim().length
                 ? trunc(sanitizedContent, 4096)
                 : '';
+            const baseDescriptionParts = [];
             if (normalizedContent) {
-                embed.setDescription(normalizedContent);
+                baseDescriptionParts.push(trunc(normalizedContent, 4096));
+            } else if (channelLabel) {
+                baseDescriptionParts.push(trunc(channelLabel, 4096));
             }
 
-            if (!normalizedContent && channelLabel) {
-                embed.setDescription(trunc(channelLabel, 4096));
+            if (pollText) {
+                baseDescriptionParts.push(trunc(pollText, 1024));
+            }
+
+            const baseDescription = baseDescriptionParts.filter(Boolean).join('\n\n').trim();
+            const viewLink = `[View](https://discord.com/channels/${message.guildId}/${message.channelId}/${message.id})`;
+            const spacer = baseDescription.length ? '\n\n' : '';
+            const maxBaseLength = Math.max(0, 4096 - viewLink.length - spacer.length);
+            const safeBase = baseDescription.length ? trunc(baseDescription, maxBaseLength) : '';
+            const combinedDescription = `${safeBase}${spacer}${viewLink}`.trim();
+            if (combinedDescription.length) {
+                embed.setDescription(combinedDescription);
             }
 
             if (!isNsfw && media.length > 0) {
@@ -192,6 +226,7 @@ export async function init({ client, config, logger }) {
                 const parts = [];
                 if (channelLabel) parts.push(channelLabel);
                 if (sanitizedContent.trim()) parts.push(sanitizedContent.trim());
+                if (pollText) parts.push(trunc(pollText, 1500));
                 if (attachmentUrls.length) parts.push(attachmentUrls.join('\n'));
 
                 const payloadContent = parts.join('\n\n').trim();
@@ -199,8 +234,13 @@ export async function init({ client, config, logger }) {
                 if (payloadContent.length > 0) {
                     payload.content = payloadContent;
                 }
-            } else if (channelLabel) {
-                payload.content = channelLabel;
+            } else {
+                const contentParts = [];
+                if (channelLabel) contentParts.push(channelLabel);
+                if (pollText) contentParts.push(trunc(pollText, 1500));
+                if (contentParts.length) {
+                    payload.content = contentParts.join('\n\n');
+                }
             }
 
             const wh = new WebhookClient({ url: webhookURL, allowedMentions: { parse: [], repliedUser: false } });

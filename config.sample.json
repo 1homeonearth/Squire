@@ -73,7 +73,6 @@
   "autoban": {
     "enabled": true,
     "blockedUsernames": ["mega", "megas", "link", "links"],
-    "verifiedRoleIds": ["123456789012345678"],
     "notifyChannelId": "987654321098765432",
     "notifyWebhookUrls": [
       "$ENV{AUTOBAN_NOTIFY_WEBHOOK}"

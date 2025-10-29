@@ -132,7 +132,6 @@ All configuration lives in `config.json`. Secrets can alternatively be provided 
 "autoban": {
   "enabled": true,
   "blockedUsernames": ["mega", "megas", "link", "links"],
-  "verifiedRoleIds": ["ROLE_ID_THAT_MARKS_VERIFIED_MEMBERS"],
   "notifyChannelId": "CHANNEL_ID_FOR_LOGGING_ACTIONS",
   "notifyWebhookUrls": ["https://discord.com/api/webhooks/..."],
   "deleteMessageSeconds": 0
@@ -141,7 +140,6 @@ All configuration lives in `config.json`. Secrets can alternatively be provided 
 
 - Set `enabled` to `false` to disable the module without removing it.
 - `blockedUsernames` is case-insensitive and deduplicated; supply any suspicious keywords you want to catch.
-- `verifiedRoleIds` lets you exempt members who already own the "Verified" role (or any trusted role) at join time.
 - `notifyChannelId` is optional; when set, the bot posts success/failure messages into that text channel.
 - `notifyWebhookUrls` is optional; provide one or more webhook URLs to receive the same moderation log events inside a dedicated logging server.
 - `deleteMessageSeconds` controls how far back Discord should purge the member's messages when banning (0 keeps history).

@@ -107,7 +107,6 @@ export function init({ client, logger, config, db }) {
         return {
             enabled: autobanCfg.enabled !== false,
             blockedTerms: normaliseTerms(autobanCfg.blockedUsernames || DEFAULT_BLOCKED_TERMS),
-            verifiedRoleIds: new Set(Array.isArray(autobanCfg.verifiedRoleIds) ? autobanCfg.verifiedRoleIds.map(String) : []),
             notifyChannelId: typeof autobanCfg.notifyChannelId === 'string' ? autobanCfg.notifyChannelId : null,
             notifyWebhooks: normaliseWebhookUrls(autobanCfg.notifyWebhookUrls ?? autobanCfg.notifyWebhookUrl),
             deleteMessageSeconds: Number.isInteger(autobanCfg.deleteMessageSeconds)
@@ -133,10 +132,6 @@ export function init({ client, logger, config, db }) {
             if (!cfg.enabled) return;
 
             if (!cfg.blockedTerms.length) return;
-
-            if (cfg.verifiedRoleIds.size > 0 && member.roles?.cache?.some(role => cfg.verifiedRoleIds.has(role.id))) {
-                return; // already verified
-            }
 
             const names = collectCandidateNames(member);
             if (names.length === 0) return;
