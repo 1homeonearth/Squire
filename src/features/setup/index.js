@@ -184,7 +184,7 @@ function normalizeWelcomeMap({ value, fallbackGuilds, loggingServerId }) {
 
     const entries = Object.entries(value);
     const looksLegacy = 'channelId' in value || 'mentions' in value;
-    const looksMap = entries.every(([key, v]) => typeof v === 'object' && !Array.isArray(v));
+    const looksMap = entries.every(([, v]) => typeof v === 'object' && !Array.isArray(v));
 
     if (looksLegacy) {
         const targetGuildId = fallbackGuilds?.find(id => id) || loggingServerId || null;
@@ -1940,7 +1940,7 @@ async function buildRainbowBridgeView({ config, client, guildOptions, mode, cont
     return { embeds: [embed], components };
 }
 
-async function handleAutobouncerInteraction({ interaction, entry, config, key, logger }) {
+async function handleAutobouncerInteraction({ interaction, entry, config, key, logger, client }) {
     if (interaction.isButton()) {
         const action = interaction.customId.split(':')[2];
         switch (action) {

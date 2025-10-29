@@ -1,9 +1,8 @@
-import test from 'node:test';
-import assert from 'node:assert/strict';
+import { expect, it } from 'vitest';
 
 import { buildLoggingView } from '../src/features/setup/index.js';
 
-test('buildLoggingView summarises mapping state and controls', async () => {
+it('buildLoggingView summarises mapping state and controls', async () => {
     const loggingGuildChannels = new Map([
         ['456', { id: '456', name: 'court-log', isTextBased: () => true }]
     ]);
@@ -49,24 +48,24 @@ test('buildLoggingView summarises mapping state and controls', async () => {
         context: {}
     });
 
-    assert.equal(view.embeds.length, 1);
+    expect(view.embeds).toHaveLength(1);
     const embed = view.embeds[0];
     const data = embed.data ?? embed.toJSON?.() ?? {};
     const fields = data.fields ?? [];
 
     const loggingField = fields.find((f) => f.name === 'Logging server');
-    assert.ok(loggingField && loggingField.value.includes('Queen\'s Court'));
+    expect(loggingField && loggingField.value.includes("Queen's Court")).toBe(true);
 
     const selectedField = fields.find((f) => f.name === 'Selected main server');
-    assert.ok(selectedField && selectedField.value.includes('Source Guild'));
+    expect(selectedField && selectedField.value.includes('Source Guild')).toBe(true);
 
     const mappingField = fields.find((f) => f.name === 'Current mapping');
-    assert.ok(mappingField && mappingField.value.includes('<#456>'));
+    expect(mappingField && mappingField.value.includes('<#456>')).toBe(true);
 
-    assert.equal(view.components[0].components[0].data.custom_id, 'setup:logging:selectSource');
+    expect(view.components[0].components[0].data.custom_id).toBe('setup:logging:selectSource');
 
     const buttonsRow = view.components[1];
-    assert.equal(buttonsRow.components.length, 4);
-    assert.equal(buttonsRow.components[0].data.custom_id, 'setup:logging:linkCurrent');
+    expect(buttonsRow.components).toHaveLength(4);
+    expect(buttonsRow.components[0].data.custom_id).toBe('setup:logging:linkCurrent');
 });
 
