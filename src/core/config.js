@@ -11,9 +11,17 @@ function safeJSON(str, fallback) {
 }
 
 export function loadConfig() {
-    const fileCfg = fs.existsSync(CONFIG_PATH)
-    ? JSON.parse(fs.readFileSync(CONFIG_PATH, 'utf8'))
-    : {};
+    let fileCfg = {};
+    if (fs.existsSync(CONFIG_PATH)) {
+        const raw = fs.readFileSync(CONFIG_PATH, 'utf8');
+        try {
+            fileCfg = JSON.parse(raw);
+        } catch (error) {
+            const reason = error?.message ?? error;
+            console.error(`[config] Failed to parse config.json at ${CONFIG_PATH}: ${reason}. Using empty defaults.`);
+            fileCfg = {};
+        }
+    }
 
     // Overlay env for CI
     const over = { ...fileCfg };
@@ -39,5 +47,8 @@ export function loadConfig() {
 }
 
 export function writeConfig(next) {
-    fs.writeFileSync(CONFIG_PATH, JSON.stringify(next, null, 2));
+    const serialized = JSON.stringify(next, null, 2);
+    const tmpPath = `${CONFIG_PATH}.tmp-${process.pid}`;
+    fs.writeFileSync(tmpPath, serialized, { mode: 0o600 });
+    fs.renameSync(tmpPath, CONFIG_PATH);
 }

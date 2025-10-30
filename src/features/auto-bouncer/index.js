@@ -78,7 +78,11 @@ async function safeWebhookNotify(urls, message, logger) {
         try {
             const client = new WebhookClient({ url });
             const payload = timestampContent({ content: typeof message === 'string' ? message : message?.content });
-            await client.send(typeof payload === 'string' ? { content: payload } : payload);
+            const normalized = typeof payload === 'string'
+                ? { content: payload }
+                : { ...payload };
+            normalized.allowedMentions = { parse: [] };
+            await client.send(normalized);
             client.destroy?.();
         } catch (err) {
             logger?.warn?.(`[autoban] Failed to notify webhook ${truncateWebhook(url)}: ${err?.message ?? err}`);

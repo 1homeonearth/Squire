@@ -122,6 +122,16 @@ export async function init({ client, config, logger }) {
         config.excludeCategories = {};
     }
 
+    const webhookCache = new Map();
+
+    function getWebhookClient(url) {
+        if (!url) return null;
+        if (!webhookCache.has(url)) {
+            webhookCache.set(url, new WebhookClient({ url, allowedMentions: { parse: [], repliedUser: false } }));
+        }
+        return webhookCache.get(url);
+    }
+
     function getSampleRate() {
         return Number.isFinite(config.sampleRate) ? config.sampleRate : 1.0;
     }
@@ -213,14 +223,16 @@ export async function init({ client, config, logger }) {
                 embeds: [embed]
             };
 
-            const wh = new WebhookClient({ url: webhookURL, allowedMentions: { parse: [], repliedUser: false } });
+            const wh = getWebhookClient(webhookURL);
+            if (!wh) return;
             await wh.send(payload);
 
             const gname = message.guild?.name ?? gid;
             const cname = channel?.name ?? channel?.id;
             logger.info(`[FWD][reaction] ${gname} #${cname} — ${emojiText} ${actionVerb} by ${displayName}`);
         } catch (error) {
-            console.error('[forwarder] messageReaction error:', error?.message ?? error);
+            const logError = logger?.error?.bind(logger) ?? console.error;
+            logError('[forwarder] messageReaction error:', error);
         }
     }
 
@@ -238,7 +250,8 @@ export async function init({ client, config, logger }) {
         for (const [id, url] of entries) {
             try {
                 const gname = client.guilds.cache.get(id)?.name ?? id;
-                const wh = new WebhookClient({ url, allowedMentions: { parse: [], repliedUser: false } });
+                const wh = getWebhookClient(url);
+                if (!wh) continue;
                 await wh.send({ content: `🛡️ **Squire online** for server **${gname}**` });
                 logger.info(`[ONLINE] Announced in server ${gname}`);
             } catch (e) {
@@ -368,7 +381,8 @@ export async function init({ client, config, logger }) {
                 }
             }
 
-            const wh = new WebhookClient({ url: webhookURL, allowedMentions: { parse: [], repliedUser: false } });
+            const wh = getWebhookClient(webhookURL);
+            if (!wh) return;
             await wh.send(payload);
 
             const gname = message.guild?.name ?? gid;
@@ -376,7 +390,8 @@ export async function init({ client, config, logger }) {
             logger.info(`[FWD] ${gname} #${cname} — by ${usernameForWebhook}`);
         } catch (e) {
             // keep the bot alive
-            console.error('[forwarder] messageCreate error:', e?.message ?? e);
+            const logError = logger?.error?.bind(logger) ?? console.error;
+            logError('[forwarder] messageCreate error:', e);
         }
     });
 
