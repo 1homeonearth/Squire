@@ -86,6 +86,7 @@
   "welcome": {
     "1129906023084343346": {
       "channelId": "555555555555555555",
+      "message": "Welcome {{user}} to {{guild}}! Please read our {{rules}}, select your {{roles}}, and then {{verify}} to unlock the full server.",
       "mentions": {
         "rules": "666666666666666666",
         "roles": "777777777777777777",

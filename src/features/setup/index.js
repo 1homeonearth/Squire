@@ -15,6 +15,11 @@ import {
 
 import { writeConfig } from '../../core/config.js';
 import { normalizeRainbowBridgeConfig, refresh as refreshRainbowBridge } from '../rainbow-bridge/index.js';
+import {
+    DEFAULT_WELCOME_MESSAGE,
+    sanitizeWelcomeMessage,
+    WELCOME_TEMPLATE_PLACEHOLDERS
+} from '../welcome-cards/template.js';
 
 const LOGGING_CHANNEL_CATEGORIES = [
     { key: 'messages', label: 'Message logs', description: 'Cross-server message forwards.' },
@@ -217,7 +222,8 @@ function normalizeWelcomeEntry(entry) {
             mentions[key] = String(rawMentions[key]);
         }
     }
-    return { channelId, mentions };
+    const message = sanitizeWelcomeMessage(obj.message);
+    return { channelId, mentions, message };
 }
 
 function coerceRecord(value) {
@@ -1215,12 +1221,13 @@ async function handleWelcomeInteraction({ interaction, entry, config, client, ke
     const ensureWelcomeEntry = () => {
         if (!currentGuildId) return null;
         if (!config.welcome[currentGuildId]) {
-            config.welcome[currentGuildId] = { channelId: null, mentions: {} };
+            config.welcome[currentGuildId] = { channelId: null, mentions: {}, message: DEFAULT_WELCOME_MESSAGE };
         }
         const entryCfg = config.welcome[currentGuildId];
         if (!entryCfg.mentions || typeof entryCfg.mentions !== 'object') {
             entryCfg.mentions = {};
         }
+        entryCfg.message = sanitizeWelcomeMessage(entryCfg.message);
         return entryCfg;
     };
 
@@ -1253,6 +1260,37 @@ async function handleWelcomeInteraction({ interaction, entry, config, client, ke
                 const view = await buildWelcomeView({ config, client, guild: targetGuild, mode: 'select', context: { target: 'verify', availableGuildIds } });
                 const message = await interaction.update(view);
                 panelStore.set(key, { message, guildId: currentGuildId, mode: 'select', context: { target: 'verify' }, availableGuildIds });
+                return;
+            }
+            case 'editMessage': {
+                const entryCfg = ensureWelcomeEntry();
+                if (!entryCfg) {
+                    await interaction.reply({ content: 'Select a server to configure first.', ephemeral: true });
+                    return;
+                }
+                const modal = new ModalBuilder()
+                .setCustomId('setup:welcome:messageModal')
+                .setTitle('Edit welcome message')
+                .addComponents(
+                    new ActionRowBuilder().addComponents(
+                        new TextInputBuilder()
+                        .setCustomId('setup:welcome:messageInput')
+                        .setLabel('Message template')
+                        .setStyle(TextInputStyle.Paragraph)
+                        .setRequired(true)
+                        .setPlaceholder('Use {{user}}, {{guild}}, {{rules}}, etc.')
+                        .setMaxLength(2000)
+                        .setValue(sanitizeWelcomeMessage(entryCfg.message))
+                    )
+                );
+                panelStore.set(key, {
+                    message: entry?.message ?? null,
+                    guildId: currentGuildId,
+                    mode: entry?.mode ?? 'default',
+                    context: entry?.context ?? {},
+                    availableGuildIds
+                });
+                await interaction.showModal(modal);
                 return;
             }
             case 'refresh': {
@@ -1313,14 +1351,61 @@ async function handleWelcomeInteraction({ interaction, entry, config, client, ke
             return;
         }
     }
+
+    if (interaction.isModalSubmit()) {
+        if (interaction.customId === 'setup:welcome:messageModal') {
+            if (!currentGuildId) {
+                await interaction.reply({ content: 'Select a server to configure first.', ephemeral: true });
+                return;
+            }
+            const entryCfg = ensureWelcomeEntry();
+            if (!entryCfg) {
+                await interaction.reply({ content: 'That server is no longer available.', ephemeral: true });
+                return;
+            }
+            const raw = interaction.fields.getTextInputValue('setup:welcome:messageInput') ?? '';
+            const sanitized = sanitizeWelcomeMessage(raw);
+            entryCfg.message = sanitized;
+            if (!saveConfig(config, logger)) {
+                await interaction.reply({ content: 'Failed to save welcome message changes.', ephemeral: true });
+                return;
+            }
+            const notice = sanitized === DEFAULT_WELCOME_MESSAGE
+                ? 'Welcome message reset to default.'
+                : 'Welcome message updated.';
+            await interaction.reply({ content: notice, ephemeral: true });
+            if (entry?.message) {
+                try {
+                    const refreshedGuild = currentGuildId ? await fetchGuild(client, currentGuildId) : null;
+                    const view = await buildWelcomeView({ config, client, guild: refreshedGuild, mode: 'default', context: { availableGuildIds } });
+                    const message = await entry.message.edit(view);
+                    panelStore.set(key, { message, guildId: currentGuildId, mode: 'default', context: { availableGuildIds }, availableGuildIds });
+                } catch {
+                    panelStore.set(key, { message: entry?.message ?? null, guildId: currentGuildId, mode: 'default', context: { availableGuildIds }, availableGuildIds });
+                }
+            } else {
+                panelStore.set(key, { message: null, guildId: currentGuildId, mode: 'default', context: { availableGuildIds }, availableGuildIds });
+            }
+            return;
+        }
+    }
 }
 
 async function buildWelcomeView({ config, client, guild, mode, context }) {
     const availableGuildIds = context?.availableGuildIds ?? config.mainServerIds.filter(id => id !== config.loggingServerId);
     const selectedGuild = guild ?? null;
     const selectedGuildId = selectedGuild?.id ?? null;
-    const welcomeEntry = selectedGuildId ? config.welcome?.[selectedGuildId] ?? { channelId: null, mentions: {} } : { channelId: null, mentions: {} };
+    const sourceEntry = selectedGuildId ? config.welcome?.[selectedGuildId] : null;
+    const welcomeEntry = {
+        channelId: sourceEntry?.channelId ?? null,
+        mentions: sourceEntry?.mentions && typeof sourceEntry.mentions === 'object' ? { ...sourceEntry.mentions } : {},
+        message: sanitizeWelcomeMessage(sourceEntry?.message)
+    };
     const mentionMap = welcomeEntry.mentions || {};
+    const messageFieldValue = selectedGuild
+        ? formatWelcomeMessageField(welcomeEntry.message)
+        : 'Select a server using the menu below.';
+    const placeholderFieldValue = formatPlaceholderField();
 
     const embed = new EmbedBuilder()
     .setTitle('Welcome card setup')
@@ -1330,7 +1415,9 @@ async function buildWelcomeView({ config, client, guild, mode, context }) {
         { name: 'Welcome channel', value: selectedGuild ? formatChannel(selectedGuild, welcomeEntry.channelId) : 'Not configured', inline: false },
         { name: 'Rules mention', value: selectedGuild ? mentionToDisplay(selectedGuild, mentionMap.rules) : 'Not configured', inline: true },
         { name: 'Roles mention', value: selectedGuild ? mentionToDisplay(selectedGuild, mentionMap.roles) : 'Not configured', inline: true },
-        { name: 'Verify mention', value: selectedGuild ? mentionToDisplay(selectedGuild, mentionMap.verify) : 'Not configured', inline: true }
+        { name: 'Verify mention', value: selectedGuild ? mentionToDisplay(selectedGuild, mentionMap.verify) : 'Not configured', inline: true },
+        { name: 'Welcome message', value: messageFieldValue, inline: false },
+        { name: 'Available placeholders', value: placeholderFieldValue, inline: false }
     );
 
     const components = [];
@@ -1370,15 +1457,19 @@ async function buildWelcomeView({ config, client, guild, mode, context }) {
 
     components.push(new ActionRowBuilder().addComponents(guildMenu));
 
-    const buttons = new ActionRowBuilder().addComponents(
+    const channelButtons = new ActionRowBuilder().addComponents(
         new ButtonBuilder().setCustomId('setup:welcome:setWelcome').setLabel('Set welcome channel').setStyle(ButtonStyle.Primary).setDisabled(!selectedGuild),
         new ButtonBuilder().setCustomId('setup:welcome:setRules').setLabel('Set rules channel').setStyle(ButtonStyle.Secondary).setDisabled(!selectedGuild),
         new ButtonBuilder().setCustomId('setup:welcome:setRoles').setLabel('Set roles channel').setStyle(ButtonStyle.Secondary).setDisabled(!selectedGuild),
-        new ButtonBuilder().setCustomId('setup:welcome:setVerify').setLabel('Set verify channel').setStyle(ButtonStyle.Secondary).setDisabled(!selectedGuild),
+        new ButtonBuilder().setCustomId('setup:welcome:setVerify').setLabel('Set verify channel').setStyle(ButtonStyle.Secondary).setDisabled(!selectedGuild)
+    );
+
+    const messageButtons = new ActionRowBuilder().addComponents(
+        new ButtonBuilder().setCustomId('setup:welcome:editMessage').setLabel('Edit welcome message').setStyle(ButtonStyle.Secondary).setDisabled(!selectedGuild),
         new ButtonBuilder().setCustomId('setup:welcome:refresh').setLabel('Refresh').setStyle(ButtonStyle.Secondary)
     );
 
-    components.push(buttons);
+    components.push(channelButtons, messageButtons);
 
     if (mode === 'select' && selectedGuild) {
         const target = context?.target;
@@ -1414,6 +1505,30 @@ async function buildWelcomeView({ config, client, guild, mode, context }) {
 function mentionToDisplay(guild, channelId) {
     if (!channelId) return 'Not configured';
     return formatChannel(guild, channelId);
+}
+
+function formatWelcomeMessageField(template) {
+    const sanitized = sanitizeWelcomeMessage(template);
+    const trimmed = sanitized.trim();
+    const isDefault = sanitized === DEFAULT_WELCOME_MESSAGE;
+    if (!trimmed) {
+        return 'Using default message.';
+    }
+    const lines = trimmed.split('\n');
+    let preview = lines.slice(0, 4).join('\n');
+    if (preview.length > 180) {
+        preview = `${preview.slice(0, 177)}…`;
+    }
+    const block = `\`\`\`\n${preview || ' '}\n\`\`\``;
+    return isDefault
+        ? `${block}\nUsing default message.`
+        : `${block}\nCustom message active.`;
+}
+
+function formatPlaceholderField() {
+    return WELCOME_TEMPLATE_PLACEHOLDERS
+    .map(entry => `${entry.token} — ${entry.description}`)
+    .join('\n');
 }
 
 async function handleRainbowBridgeInteraction({ interaction, entry, config, key, client, logger }) {
