@@ -1,8 +1,7 @@
 // src/features/welcome-cards/index.js
+import { createCanvas, loadImage as loadCanvasImage } from '@napi-rs/canvas';
 import { AttachmentBuilder } from 'discord.js';
-import { JSX, Builder, loadImage, Font } from 'canvacord';
-
-const { createElement } = JSX;
+import { loadImage, Font } from 'canvacord';
 
 // Load the built-in font once
 Font.loadDefault();
@@ -36,61 +35,36 @@ async function findWelcomeChannel(guild, channelId) {
     return findByName(guild, 'welcome') || guild.systemChannel || null;
 }
 
-// ---- Welcome Card builder (avatar on top of user banner)
-class WelcomeCard extends Builder {
-    constructor() {
-        super(1000, 360);
-        this.bootstrap({
-            displayName: '',
-            avatarDataURL: '',
-            bannerDataURL: null, // nullable
-            headline: ''
-        });
-    }
-    setDisplayName(v) { this.options.set('displayName', v); return this; }
-    setAvatarDataURL(v) { this.options.set('avatarDataURL', v); return this; }
-    setBannerDataURL(v) { this.options.set('bannerDataURL', v); return this; }
-    setHeadline(v) { this.options.set('headline', v); return this; }
 
-    async render() {
-        const { displayName, avatarDataURL, bannerDataURL, headline } = this.options.getOptions();
+function fillRoundedRect(ctx, x, y, width, height, radius, fillStyle) {
+    const r = Math.min(radius, width / 2, height / 2);
+    ctx.beginPath();
+    ctx.moveTo(x + r, y);
+    ctx.arcTo(x + width, y, x + width, y + height, r);
+    ctx.arcTo(x + width, y + height, x, y + height, r);
+    ctx.arcTo(x, y + height, x, y, r);
+    ctx.arcTo(x, y, x + width, y, r);
+    ctx.closePath();
+    ctx.fillStyle = fillStyle;
+    ctx.fill();
+}
 
-        const background = bannerDataURL
-            ? createElement('img', {
-                src: bannerDataURL,
-                className: 'absolute inset-0 w-full h-full object-cover'
-            })
-            : createElement('div', {
-                className: 'absolute inset-0 bg-linear-to-r from-[#23272A] to-[#2B2F35]'
-            });
+function drawAvatar(ctx, img, x, y, size) {
+    const radius = size / 2;
+    ctx.save();
+    ctx.beginPath();
+    ctx.arc(x, y, radius, 0, Math.PI * 2);
+    ctx.closePath();
+    ctx.clip();
+    ctx.drawImage(img, x - radius, y - radius, size, size);
+    ctx.restore();
 
-        return createElement(
-            'div',
-            { className: 'w-full h-full rounded-xl overflow-hidden relative' },
-            background,
-            createElement('div', {
-                className: 'absolute inset-0 bg-[#00000066]'
-            }),
-            createElement(
-                'div',
-                { className: 'relative w-full h-full flex flex-col items-center justify-center' },
-                createElement('img', {
-                    src: avatarDataURL,
-                    className: 'h-[144] w-[144] rounded-full border-[8] border-[#FFFFFF] shadow-xl'
-                }),
-                createElement(
-                    'h1',
-                    { className: 'm-0 mt-5 text-[40] font-bold text-white tracking-wide' },
-                    headline
-                ),
-                createElement(
-                    'p',
-                    { className: 'm-0 mt-2 text-[28] text-[#D1D5DB]' },
-                    displayName
-                )
-            )
-        );
-    }
+    ctx.lineWidth = 10;
+    ctx.strokeStyle = '#2563EB';
+    ctx.beginPath();
+    ctx.arc(x, y, radius - 5, 0, Math.PI * 2);
+    ctx.closePath();
+    ctx.stroke();
 }
 
 async function buildWelcomeImage(member, logger) {
@@ -98,28 +72,52 @@ async function buildWelcomeImage(member, logger) {
     try { await member.user.fetch(true); } catch {}
 
     const avatarURL = member.displayAvatarURL({ extension: 'png', size: 512 });
-    const bannerURL =
-    member.user.bannerURL?.({ size: 2048, extension: 'png', dynamic: true }) ||
-    member.displayBannerURL?.({ size: 2048, extension: 'png', dynamic: true }) ||
-    null;
 
     let avatarImg = null;
     try {
-        avatarImg = await loadImage(avatarURL);
+        const fetched = await loadImage(avatarURL);
+        avatarImg = await loadCanvasImage(fetched.data);
     } catch (err) {
         logger?.warn?.(`[welcome] failed to load avatar for ${member.user?.tag ?? member.id}: ${err?.message ?? err}`);
         return null;
     }
 
-    const bannerImg = bannerURL ? await loadImage(bannerURL).catch(() => null) : null;
+    const width = 1000;
+    const height = 360;
+    const canvas = createCanvas(width, height);
+    const ctx = canvas.getContext('2d');
 
-    const card = new WelcomeCard()
-        .setDisplayName(member.displayName || member.user.username)
-        .setAvatarDataURL(avatarImg.toDataURL())
-        .setBannerDataURL(bannerImg ? bannerImg.toDataURL() : null)
-        .setHeadline('WELCOME');
+    // Background layers
+    ctx.fillStyle = '#111827';
+    ctx.fillRect(0, 0, width, height);
+    fillRoundedRect(ctx, 24, 24, width - 48, height - 48, 36, '#1F2933');
 
-    const buffer = await card.build({ format: 'png' });
+    // Subtle inner highlight
+    ctx.save();
+    ctx.globalAlpha = 0.35;
+    fillRoundedRect(ctx, 24, 24, width - 48, height / 2, 36, '#27323F');
+    ctx.restore();
+
+    const centerX = width / 2;
+    const avatarSize = 190;
+    const avatarCenterY = 150;
+    drawAvatar(ctx, avatarImg, centerX, avatarCenterY, avatarSize);
+
+    const displayName = member.displayName || member.user.username;
+
+    ctx.fillStyle = '#FFFFFF';
+    ctx.textAlign = 'center';
+    ctx.textBaseline = 'middle';
+
+    ctx.font = '700 64px "Manrope", "Inter", sans-serif';
+    ctx.fillText('WELCOME', centerX, avatarCenterY + avatarSize / 2 + 44);
+
+    ctx.font = '600 48px "Manrope", "Inter", sans-serif';
+    ctx.fillStyle = '#E5E7EB';
+    ctx.fillText(`Welcome, ${displayName}!`, centerX, avatarCenterY + avatarSize / 2 + 120);
+
+    const png = await canvas.encode('png');
+    const buffer = Buffer.isBuffer(png) ? png : Buffer.from(png);
     return new AttachmentBuilder(buffer, { name: 'welcome.png' });
 }
 
@@ -140,7 +138,7 @@ export function init({ client, logger, config }) {
             const rules  = mentionFromConfig(member.guild, 'rules', mentionMap);
             const roles  = mentionFromConfig(member.guild, 'roles', mentionMap);
             const verify = mentionFromConfig(member.guild, 'verify', mentionMap);
-            await ch.send(`Please read our ${rules}, select your ${roles}, and then ${verify} to unlock the full server.`);
+            await ch.send(`Welcome <@${member.id}> to ${member.guild.name}! Please read our ${rules}, select your ${roles}, and then ${verify} to unlock the full server.`);
 
             const image = await buildWelcomeImage(member, logger);
             if (image) {
