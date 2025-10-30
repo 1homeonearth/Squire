@@ -14,6 +14,37 @@ const RAINBOW = [0xFF0000, 0xFFA500, 0xFFFF00, 0x00FF00, 0x0000FF, 0x800080];
 
 // --- helpers ---
 const trunc = (s, n) => (s && String(s).length > n ? String(s).slice(0, n - 1) + '…' : String(s || ''));
+const sanitizeMentions = (text) => typeof text === 'string'
+    ? text.replace(/<(@[!&]?|#)(\d+)>/g, '<$1\u200B$2>')
+    : '';
+const formatAsBlockQuote = (text) => (text || '').split(/\r?\n/).map((line) => `> ${line}`).join('\n');
+
+async function resolveMemberContext(guild, user) {
+    const fallbackName = user?.globalName ?? user?.username ?? user?.id ?? 'Unknown user';
+    const fallbackAvatar = typeof user?.displayAvatarURL === 'function' ? user.displayAvatarURL() : null;
+
+    if (!guild || !user) {
+        return { displayName: fallbackName, avatarURL: fallbackAvatar };
+    }
+
+    let member = null;
+    try {
+        const cache = guild.members?.cache;
+        if (cache && typeof cache.get === 'function') {
+            member = cache.get(user.id) ?? null;
+        }
+        if (!member && typeof guild.members?.fetch === 'function') {
+            member = await guild.members.fetch(user.id);
+        }
+    } catch {}
+
+    const displayName = member?.displayName ?? fallbackName;
+    const avatarURL = typeof member?.displayAvatarURL === 'function'
+        ? member.displayAvatarURL()
+        : fallbackAvatar;
+
+    return { displayName, avatarURL };
+}
 function resolveCategoryId(channel) {
     try {
         const isThread = typeof channel.isThread === 'function' && channel.isThread();
@@ -97,6 +128,100 @@ export async function init({ client, config, logger }) {
 
     function shouldForwardBots() {
         return !!config.forwardBots;
+    }
+
+    async function forwardReactionEvent(kind, reaction, user) {
+        try {
+            if (!reaction) return;
+
+            if (reaction.partial && typeof reaction.fetch === 'function') {
+                try { await reaction.fetch(); } catch { return; }
+            }
+
+            const message = reaction.message;
+            if (!message || !message.guild) return;
+
+            if (loggingServerId && message.guild.id === loggingServerId) {
+                logger.verbose?.(`[REACTION] server=${message.guild.id} (${message.guild.name}) — skipped: logging server`);
+                return;
+            }
+
+            if (!shouldForwardBots() && user?.bot) return;
+
+            const gid = message.guild.id;
+            const webhookURL = (config.mapping || {})[gid];
+            if (!webhookURL) return;
+
+            const channel = message.channel;
+            if (!channel) return;
+
+            const excludeChannels = config.excludeChannels || {};
+            if ((excludeChannels[gid] || []).includes(channel.id)) return;
+
+            const catId = resolveCategoryId(channel);
+            const excludeCategories = config.excludeCategories || {};
+            if (catId && (excludeCategories[gid] || []).includes(catId)) return;
+
+            if (Math.random() >= getSampleRate()) return;
+
+            const { displayName, avatarURL } = await resolveMemberContext(message.guild, user);
+
+            const emojiText = typeof reaction.emoji?.toString === 'function'
+                ? reaction.emoji.toString()
+                : (reaction.emoji?.name ?? 'emoji');
+
+            const actionVerb = kind === 'removed' ? 'removed' : 'added';
+            const totalSuffix = Number.isFinite(reaction.count) && reaction.count > 1
+                ? ` (×${reaction.count})`
+                : '';
+
+            const channelLabel = formatChannelLabel(channel, message.channelId);
+            const headerParts = [`${emojiText}${totalSuffix} ${actionVerb}`];
+            if (channelLabel) {
+                headerParts.push(`in ${channelLabel}`);
+            }
+
+            const messageLink = `https://discord.com/channels/${message.guildId}/${message.channelId}/${message.id}`;
+            const messageAuthorName = message.member?.displayName
+                ?? message.author?.globalName
+                ?? message.author?.username
+                ?? message.author?.id
+                ?? '';
+
+            const preview = sanitizeMentions((message.content || '').trim());
+            const previewBlock = preview ? formatAsBlockQuote(trunc(preview, 600)) : '';
+
+            const descriptionParts = [headerParts.join(' '), `by **${displayName}**`];
+            if (messageAuthorName) {
+                descriptionParts.push(`On message by **${messageAuthorName}**`);
+            }
+            if (previewBlock) {
+                descriptionParts.push(previewBlock);
+            }
+            descriptionParts.push(`[View message](${messageLink})`);
+
+            const embed = new EmbedBuilder().setColor(nextColor(gid));
+            embed.setDescription(descriptionParts.filter(Boolean).join('\n\n'));
+
+            if (!embed.data.description) {
+                embed.setDescription('\u200B');
+            }
+
+            const payload = {
+                username: displayName,
+                avatarURL,
+                embeds: [embed]
+            };
+
+            const wh = new WebhookClient({ url: webhookURL, allowedMentions: { parse: [], repliedUser: false } });
+            await wh.send(payload);
+
+            const gname = message.guild?.name ?? gid;
+            const cname = channel?.name ?? channel?.id;
+            logger.info(`[FWD][reaction] ${gname} #${cname} — ${emojiText} ${actionVerb} by ${displayName}`);
+        } catch (error) {
+            console.error('[forwarder] messageReaction error:', error?.message ?? error);
+        }
     }
 
     // announce online in each mapped destination webhook when client is ready
@@ -254,5 +379,8 @@ export async function init({ client, config, logger }) {
             console.error('[forwarder] messageCreate error:', e?.message ?? e);
         }
     });
+
+    client.on('messageReactionAdd', async (reaction, user) => forwardReactionEvent('added', reaction, user));
+    client.on('messageReactionRemove', async (reaction, user) => forwardReactionEvent('removed', reaction, user));
 
 }
