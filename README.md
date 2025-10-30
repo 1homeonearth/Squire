@@ -152,7 +152,7 @@ For CI/CD you can provide a full JSON blob through `AUTOBAN_CONFIG_JSON` to over
 "welcome": {
   "123456789012345678": {
     "channelId": "WELCOME_CHANNEL_ID",
-    "message": "Welcome {{user}} to {{guild}}! Please read our {{rules}}, select your {{roles}}, and then {{verify}} to unlock the full server.",
+    "message": "Welcome {{user}} to {{guild}}!\nPlease read our {{rules}}, select your {{roles}}, and then {{verify}} to unlock the full server.",
     "mentions": {
       "rules": "RULES_CHANNEL_ID",
       "roles": "ROLES_CHANNEL_ID",

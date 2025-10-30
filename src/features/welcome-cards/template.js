@@ -1,4 +1,4 @@
-export const DEFAULT_WELCOME_MESSAGE = 'Welcome {{user}} to {{guild}}! Please read our {{rules}}, select your {{roles}}, and then {{verify}} to unlock the full server.';
+export const DEFAULT_WELCOME_MESSAGE = 'Welcome {{user}} to {{guild}}!\nPlease read our {{rules}}, select your {{roles}}, and then {{verify}} to unlock the full server.';
 
 export const WELCOME_TEMPLATE_PLACEHOLDERS = [
     { token: '{{user}}', description: 'Mentions the new member.' },
