@@ -3,6 +3,11 @@ import { createCanvas, loadImage as loadCanvasImage } from '@napi-rs/canvas';
 import { AttachmentBuilder } from 'discord.js';
 import { loadImage, Font } from 'canvacord';
 
+import {
+    DEFAULT_WELCOME_MESSAGE,
+    sanitizeWelcomeMessage
+} from './template.js';
+
 // Load the built-in font once
 Font.loadDefault();
 
@@ -19,6 +24,17 @@ function mentionFromConfig(guild, canon, mapping) {
     }
     const ch = findByName(guild, canon);
     return ch ? `<#${ch.id}>` : `#${canon}`;
+}
+
+function renderWelcomeTemplate(template, replacements) {
+    if (!template || typeof template !== 'string') {
+        return DEFAULT_WELCOME_MESSAGE;
+    }
+    const map = { ...replacements };
+    return template.replace(/\{\{\s*(\w+)\s*\}\}/g, (match, key) => {
+        const lower = key.toLowerCase();
+        return Object.prototype.hasOwnProperty.call(map, lower) ? map[lower] : match;
+    });
 }
 
 async function findWelcomeChannel(guild, channelId) {
@@ -138,7 +154,19 @@ export function init({ client, logger, config }) {
             const rules  = mentionFromConfig(member.guild, 'rules', mentionMap);
             const roles  = mentionFromConfig(member.guild, 'roles', mentionMap);
             const verify = mentionFromConfig(member.guild, 'verify', mentionMap);
-            await ch.send(`Welcome <@${member.id}> to ${member.guild.name}! Please read our ${rules}, select your ${roles}, and then ${verify} to unlock the full server.`);
+            const messageTemplate = sanitizeWelcomeMessage(welcomeCfg.message);
+            const rendered = renderWelcomeTemplate(messageTemplate, {
+                user: `<@${member.id}>`,
+                username: member.user?.username ?? member.user?.tag ?? member.id,
+                usertag: member.user?.tag ?? member.user?.username ?? member.id,
+                displayname: member.displayName ?? member.user?.globalName ?? member.user?.username ?? member.id,
+                guild: member.guild.name ?? 'this server',
+                rules,
+                roles,
+                verify,
+                membercount: String(member.guild.memberCount ?? member.guild.approximateMemberCount ?? '')
+            });
+            await ch.send(rendered);
 
             const image = await buildWelcomeImage(member, logger);
             if (image) {

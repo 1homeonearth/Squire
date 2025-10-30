@@ -152,6 +152,7 @@ For CI/CD you can provide a full JSON blob through `AUTOBAN_CONFIG_JSON` to over
 "welcome": {
   "123456789012345678": {
     "channelId": "WELCOME_CHANNEL_ID",
+    "message": "Welcome {{user}} to {{guild}}! Please read our {{rules}}, select your {{roles}}, and then {{verify}} to unlock the full server.",
     "mentions": {
       "rules": "RULES_CHANNEL_ID",
       "roles": "ROLES_CHANNEL_ID",
@@ -163,6 +164,15 @@ For CI/CD you can provide a full JSON blob through `AUTOBAN_CONFIG_JSON` to over
 
 - Each key in the map is a guild ID. The optional `channelId` forces the welcome module to post into a specific text channel instead of auto-detecting one by name.
 - The `mentions` block replaces the placeholder channel names in the welcome reminder text with proper clickable mentions for that guild.
+- The optional `message` string customises the text sent alongside the welcome card. Leave it empty to fall back to the default.
+- Supported placeholders inside the message template:
+  - `{{user}}` — Mention of the new member.
+  - `{{username}}` — Discord username of the new member.
+  - `{{usertag}}` — Legacy username#discriminator tag when available.
+  - `{{displayname}}` — Server display name or global name for the member.
+  - `{{guild}}` — Name of the server the member just joined.
+  - `{{rules}}`, `{{roles}}`, `{{verify}}` — Mentions (or fallbacks) to the configured channels.
+  - `{{membercount}}` — Current cached member count for the server.
 
 ### In-Discord setup panel
 
