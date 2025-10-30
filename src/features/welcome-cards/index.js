@@ -75,12 +75,24 @@ function drawAvatar(ctx, img, x, y, size) {
     ctx.drawImage(img, x - radius, y - radius, size, size);
     ctx.restore();
 
-    ctx.lineWidth = 10;
+    ctx.lineWidth = 8;
     ctx.strokeStyle = '#2563EB';
     ctx.beginPath();
-    ctx.arc(x, y, radius - 5, 0, Math.PI * 2);
+    ctx.arc(x, y, radius - 6, 0, Math.PI * 2);
     ctx.closePath();
     ctx.stroke();
+}
+
+function fitFont(ctx, weight, family, text, maxWidth, startSize, minSize) {
+    let size = startSize;
+    while (size > minSize) {
+        ctx.font = `${weight} ${size}px ${family}`;
+        if (ctx.measureText(text).width <= maxWidth) {
+            break;
+        }
+        size -= 2;
+    }
+    return Math.max(size, minSize);
 }
 
 async function buildWelcomeImage(member, logger) {
@@ -99,38 +111,50 @@ async function buildWelcomeImage(member, logger) {
     }
 
     const width = 1000;
-    const height = 360;
+    const height = 460;
     const canvas = createCanvas(width, height);
     const ctx = canvas.getContext('2d');
 
     // Background layers
-    ctx.fillStyle = '#111827';
+    ctx.fillStyle = '#0F172A';
     ctx.fillRect(0, 0, width, height);
-    fillRoundedRect(ctx, 24, 24, width - 48, height - 48, 36, '#1F2933');
+    fillRoundedRect(ctx, 28, 32, width - 56, height - 64, 44, '#1B2637');
 
-    // Subtle inner highlight
+    // Accent band across the top
     ctx.save();
-    ctx.globalAlpha = 0.35;
-    fillRoundedRect(ctx, 24, 24, width - 48, height / 2, 36, '#27323F');
+    ctx.globalAlpha = 0.55;
+    fillRoundedRect(ctx, 28, 32, width - 56, 160, 44, '#223248');
     ctx.restore();
 
+    // Soft glow behind avatar
     const centerX = width / 2;
-    const avatarSize = 190;
-    const avatarCenterY = 150;
+    const avatarSize = 150;
+    const avatarCenterY = 170;
+    const gradient = ctx.createRadialGradient(centerX, avatarCenterY, 10, centerX, avatarCenterY, avatarSize);
+    gradient.addColorStop(0, 'rgba(37, 99, 235, 0.45)');
+    gradient.addColorStop(1, 'rgba(37, 99, 235, 0)');
+    ctx.fillStyle = gradient;
+    ctx.beginPath();
+    ctx.arc(centerX, avatarCenterY, avatarSize * 0.95, 0, Math.PI * 2);
+    ctx.fill();
+
     drawAvatar(ctx, avatarImg, centerX, avatarCenterY, avatarSize);
 
     const displayName = member.displayName || member.user.username;
 
-    ctx.fillStyle = '#FFFFFF';
     ctx.textAlign = 'center';
     ctx.textBaseline = 'middle';
 
-    ctx.font = '700 64px "Manrope", "Inter", sans-serif';
-    ctx.fillText('WELCOME', centerX, avatarCenterY + avatarSize / 2 + 44);
+    const titleFont = fitFont(ctx, '700', 'Manrope, "Inter", sans-serif', 'WELCOME', width - 240, 64, 44);
+    ctx.font = `700 ${titleFont}px "Manrope", "Inter", sans-serif`;
+    ctx.fillStyle = '#FFFFFF';
+    ctx.fillText('WELCOME', centerX, avatarCenterY + avatarSize / 2 + 52);
 
-    ctx.font = '600 48px "Manrope", "Inter", sans-serif';
+    const welcomeText = `Welcome, ${displayName}!`;
+    const welcomeFont = fitFont(ctx, '600', 'Manrope, "Inter", sans-serif', welcomeText, width - 260, 40, 28);
+    ctx.font = `600 ${welcomeFont}px "Manrope", "Inter", sans-serif`;
     ctx.fillStyle = '#E5E7EB';
-    ctx.fillText(`Welcome, ${displayName}!`, centerX, avatarCenterY + avatarSize / 2 + 120);
+    ctx.fillText(welcomeText, centerX, avatarCenterY + avatarSize / 2 + 120);
 
     const png = await canvas.encode('png');
     const buffer = Buffer.isBuffer(png) ? png : Buffer.from(png);
