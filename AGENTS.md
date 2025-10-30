@@ -1,36 +1,93 @@
-# Squire contributor guide
+This is the operating manual for coding agents (Copilot agent-mode, OpenAI/Codex-style agents, Cursor, Aider, etc.). Read it end-to-end before running anything.
+Secrets never live in git; they come from the server environment at deploy.
 
-Welcome to Squire! This document tells automation agents how to work inside this repository. It applies to the entire project tree.
+## Project overview
+— Domain: Discord bot with two modules: a logging pipeline and a rainbow-bridge relay.
+— Critical behavior: preserve native YouTube playback (do not ‘pretty up’ YouTube; let Discord unfurl the raw link).
+— Runtime: Node.js 22.x in production (Node 20 tested locally).
+— Config model: derived from server env; no plaintext secrets in the repo.
 
-## Quick project tour
-- **Runtime:** Node.js 22+, ECMAScript modules (`type": "module"`).【F:package.json†L1-L28】
-- **Entry point:** `src/index.js` bootstraps config, logger, database, and dynamically loads every feature under `src/features/*/index.js`.【F:src/index.js†L1-L65】【F:src/core/loader.js†L1-L57】
-- **Core services:** Live in `src/core/` (Discord client, config loader, logger, LokiJS helpers, slash-command utilities).【F:src/index.js†L1-L65】
-- **Features:** Each folder exports an async `init(ctx)` that wires listeners using `{ client, config, logger, db }` and should clean up after itself when possible.【F:src/core/loader.js†L17-L54】
-- **Tests:** Vitest suites reside in `tests/` and exercise feature behaviour using lightweight stubs/mocks.【F:tests/auto-bouncer.test.js†L1-L81】
+## Local dev & checks
+Use Node.js 22 locally. Install deps with `npm ci`. Keep `package.json` scripts exactly as:
 
-## Coding conventions
-- Stick to modern JavaScript with async/await. Avoid callbacks when a Promise-based API exists.
-- Preserve the existing formatting: 4-space indentation, semicolons, and trailing commas only where already present.
-- Keep imports sorted in logical blocks: Node built-ins, third-party packages, then local modules. Use extensionless relative paths only when the target is a directory index; otherwise include `.js`.
-- Never wrap `import` declarations in `try/catch` blocks.
-- Prefer descriptive logger messages and include a module prefix in square brackets (e.g. `[auto-bouncer]`). Use the provided `logger` instead of `console.*`.
-- When mutating the persisted LokiJS collections, use helper utilities from `src/core/db.js` instead of accessing `.data` directly to keep indexes healthy.
-- Configuration goes through `config` passed in the shared context. Respect overrides from environment variables (see `config.sample.json`) and avoid hardcoding secrets or guild IDs.
-- Features should guard their event handlers with cheap predicate checks before performing expensive I/O so the bot remains responsive.
-- New feature modules must export `init(ctx)` and should return early with a log warning when disabled by config so that `loadFeatures` continues cleanly.【F:src/core/loader.js†L23-L54】
+```
+{
+  "scripts": {
+    "lint": "eslint .",
+    "test": "vitest run",
+    "build": "tsc -p . || true",
+    "start": "node index.js"
+  }
+}
+```
 
-## Testing & QA
-- Always run `npm run lint` and `npm test` before committing when you touch source or test files. Add/update Vitest suites alongside new behaviour.【F:package.json†L9-L22】
-- If TypeScript type definitions matter for your change, run `npm run build` (which invokes `tsc -p .`) to catch declaration errors, even though the project ships JavaScript sources.【F:package.json†L9-L17】
-- Prefer unit or integration tests under `tests/` that stub Discord.js objects using light `EventEmitter` mocks (see existing suites for patterns).【F:tests/auto-bouncer.test.js†L8-L81】
+PRs are acceptable only if `npm run lint`, `npm test`, and `npm run build` all pass.
 
-## Documentation & operational notes
-- When you add or modify configuration fields, mirror the change in `config.sample.json` and extend the README configuration tables as appropriate.【F:README.md†L27-L140】
-- Keep the README feature descriptions accurate whenever you introduce or deprecate a module.【F:README.md†L1-L90】
-- Avoid committing secrets. Use environment variables or `.env` files kept out of version control.
+## Configuration contract
+- Ship `config.sample.json` with placeholders using the `$ENV{VAR_NAME}` syntax for every secret or deployment-specific value.
+- Implement `scripts/render-config.mjs` so that it deep-merges any existing `config.json` defaults, resolves `$ENV{...}` from `process.env`, fails loudly when required env vars are absent, and writes `config.json` atomically.
+- When introducing new settings or secrets, add keys to `config.sample.json` with `$ENV{...}` placeholders and document them in this manual. Never commit real secret values.
 
-## Commit & PR etiquette
-- Write conventional, present-tense commit messages (e.g. `feat: add bridge metrics`). Group related changes together.
-- After committing, use the `make_pr` tool with a concise summary and a bullet list of highlights. Mention tests you executed.
-- Ensure every automated change is reproducible; document manual steps in commit messages or PR notes when unavoidable.
+## Deployment & server contract
+- Remote host: MCS (Debian 13), SSH port 123, key-based auth only.
+- Server repo path: `/opt/squire/app` owned by user `squire`.
+- Managed via a systemd unit running as `squire`. CI must not modify systemd units, firewall rules, or any secrets.
+- Server operations are executed with `squirectl deploy|start|restart|status`.
+
+### What `squirectl deploy` guarantees
+1. `git fetch --all --prune` and `git reset --hard origin/main` as user `squire`.
+2. `npm ci --omit=dev`.
+3. `node ./scripts/render-config.mjs` to materialize `config.json` from environment variables.
+4. Restart (or start) the systemd unit.
+5. Print a concise status tail.
+
+This is how new secrets/environment variables are picked up automatically at deploy—never edit `config.json` by hand.
+
+## CI workflow behavior
+- Keep `.github/workflows/deploy-on-merge.yml` as the single deploy entrypoint.
+- Trigger on PR merges to `main` and direct pushes to `main`.
+- The job must SSH to MCS on port 123 using Actions secrets and run exactly `squirectl deploy`.
+- Workflows must not read or write application secrets. Grant least-privilege permissions and pin third-party actions by full commit SHA.
+
+## YouTube playback requirements (hard fail if broken)
+- When content contains a YouTube URL, post only the raw URL text.
+- Do not wrap YouTube URLs in angle brackets; that suppresses the native preview.
+- Do not set flags that suppress embeds (such as `SuppressEmbeds`).
+- Do not attach competing custom embeds when forwarding YouTube links; let Discord unfurl the native player.
+- Provide `src/lib/youtube.ts` with:
+  - `isYouTubeUrl(text): boolean` — detect `youtube.com/watch?v=...` and `youtu.be/...` forms.
+  - `prepareForNativeEmbed(text): string` — remove any angle-bracket wrapping if present.
+- Both bot modules must call a shared helper so that when `isYouTubeUrl(content)` is true the bot posts only the cleaned content with `allowedMentions: { parse: [] }` and no embeds or suppression flags.
+
+## Code style & quality
+- Favor small, pure functions with explicit return types.
+- Keep logs concise; never print environment variable values.
+- Add or update tests for every user-visible or reliability-impacting change.
+- Keep the root `LICENSE` canonical and ensure `package.json#license` contains a matching, valid SPDX identifier.
+
+## Commits & versioning
+- Use Conventional Commits (e.g. `feat(bridge): forward YouTube links as plain URLs`, `fix(logging): avoid suppressing embeds on YT`, `chore(ci): pin ssh action to commit SHA`).
+- Follow SemVer: major for breaking changes (note with `BREAKING CHANGE:`), minor for features, patch for fixes. Bump versions whenever public behaviour changes.
+
+## Security guardrails
+- Never commit secrets or tokens; use `$ENV{...}` placeholders exclusively.
+- Do not modify systemd units, EnvironmentFiles, firewall, or networking from CI.
+- In workflows, pin all third-party Actions to full commit SHAs and grant minimal permissions (e.g. `contents: read`).
+
+## Files & paths that matter
+- `.github/workflows/deploy-on-merge.yml` — CI entrypoint that only runs `squirectl deploy` over SSH.
+- `scripts/render-config.mjs` — renders `config.json` from environment variables on deploy.
+- `config.sample.json` — authoritative configuration keys; secrets referenced via `$ENV{VAR}`.
+- `src/lib/youtube.ts` — helpers that preserve native YouTube playback.
+- `LICENSE` + `package.json#license` — must match and remain SPDX-valid.
+
+## How Copilot and other agents should consume this file
+Treat `AGENTS.md` as the highest-priority repository guidance unless the current user prompt explicitly overrides it.
+
+## Operational facts
+- Server: MCS (Debian 13, systemd), SSH port 123, key-auth only.
+- Users: `root` (units/env), `squire` (owns `/opt/squire/app`), `sysadmin` (no sudo), `filegirl` (SFTP drop).
+- Deploy verb: `squirectl deploy` (fetch/reset → install → render-config → restart).
+- YouTube rule recap: raw link, no angle brackets, no suppression flags, no custom embed.
+- License: keep canonical and SPDX-valid.
+- Runtime context: production on Node 22.x; review periodically against Node LTS/maintenance windows.
