@@ -29,6 +29,7 @@
     "notifyWebhookUrls": [
       "$ENV{AUTOBAN_NOTIFY_WEBHOOK}"
     ],
+    "testRoleMap": "$ENV{AUTOBAN_TEST_ROLE_MAP_JSON}",
     "deleteMessageSeconds": 0,
     "scanBio": true
   },

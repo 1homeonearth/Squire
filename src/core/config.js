@@ -51,6 +51,13 @@ export function loadConfig() {
         autobanBase.notifyChannelId = process.env.AUTOBAN_NOTIFY_CHANNEL_ID;
         over.autoban = autobanBase;
     }
+    if (process.env.AUTOBAN_TEST_ROLE_MAP_JSON) {
+        const autobanBase = over.autoban && typeof over.autoban === 'object'
+            ? { ...over.autoban }
+            : (fileCfg.autoban && typeof fileCfg.autoban === 'object' ? { ...fileCfg.autoban } : {});
+        autobanBase.testRoleMap = safeJSON(process.env.AUTOBAN_TEST_ROLE_MAP_JSON, autobanBase.testRoleMap);
+        over.autoban = autobanBase;
+    }
 
     if (typeof over.mapping === 'string') {
         over.mapping = safeJSON(over.mapping, {});

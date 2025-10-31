@@ -1,4 +1,6 @@
-import globals from 'globals';
+const nodeGlobals = Object.fromEntries(
+  Object.getOwnPropertyNames(globalThis).map((name) => [name, 'readonly'])
+);
 
 export default [
   {
@@ -9,9 +11,7 @@ export default [
     languageOptions: {
       sourceType: 'module',
       ecmaVersion: 'latest',
-      globals: {
-        ...globals.node
-      }
+      globals: nodeGlobals
     },
     rules: {
       'no-console': 'off',
@@ -26,7 +26,7 @@ export default [
       sourceType: 'module',
       ecmaVersion: 'latest',
       globals: {
-        ...globals.node,
+        ...nodeGlobals,
         vi: true,
         describe: true,
         it: true,
