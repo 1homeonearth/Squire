@@ -6,6 +6,8 @@ import { WebhookClient } from 'discord.js';
 import { ensureCollection } from '../../core/db.js';
 
 const DEFAULT_BLOCKED_TERMS = ['mega', 'megas', 'link', 'links'];
+const STALE_ROLE_THRESHOLD_MS = 7 * 24 * 60 * 60 * 1000;
+const ROLE_SWEEP_INTERVAL_MS = 6 * 60 * 60 * 1000;
 
 function normaliseTerms(terms) {
     return [...new Set(
@@ -153,10 +155,17 @@ export function init({ client, logger, config, db }) {
         config.autoban = {};
     }
 
+    let activeConfig = config;
+
     const moderationEvents = db ? ensureCollection(db, 'moderation_events', { indices: ['guildId', 'userId', 'type'] }) : null;
 
+    function getAutobanSource() {
+        const source = activeConfig && typeof activeConfig === 'object' ? activeConfig.autoban : null;
+        return source && typeof source === 'object' ? source : {};
+    }
+
     function getConfig() {
-        const autobanCfg = config.autoban || {};
+        const autobanCfg = getAutobanSource();
         return {
             enabled: autobanCfg.enabled !== false,
             blockedTerms: normaliseTerms(autobanCfg.blockedUsernames || DEFAULT_BLOCKED_TERMS),
@@ -284,7 +293,7 @@ export function init({ client, logger, config, db }) {
                 );
             }
 
-            const welcomeChannel = await resolveWelcomeChannelFromConfig(member.guild, config);
+            const welcomeChannel = await resolveWelcomeChannelFromConfig(member.guild, activeConfig);
             await safePlainChannelNotify(welcomeChannel, 'Autobouncer banned a user from even trying to get in.', logger);
 
             client.emit('squire:autoban:banned', { guildId: member.guild?.id, userId: member.id });
@@ -307,6 +316,258 @@ export function init({ client, logger, config, db }) {
             client.emit('squire:autoban:failed', { guildId: member.guild?.id, userId: member.id });
         }
     });
+
+    const staleSweepState = {
+        running: false,
+        timer: null
+    };
+
+    async function handleStaleMember(member, { guild, cfg, hasUnverified, hasTestRole, joinedTimestamp }) {
+        const guildId = guild?.id ?? member.guild?.id ?? 'unknown';
+        const guildName = guild?.name ?? member.guild?.name ?? 'Unknown Server';
+        const descriptor = hasUnverified && hasTestRole
+            ? 'kept unverified and test roles for over 7 days'
+            : hasTestRole
+                ? 'kept the configured test role for over 7 days'
+                : 'remained unverified for over 7 days';
+        const reason = `Autobouncer: ${descriptor}`;
+        const matchedSource = hasUnverified && hasTestRole
+            ? 'both'
+            : hasTestRole
+                ? 'test-role'
+                : 'unverified-role';
+        const joinedTag = joinedTimestamp ? `<t:${Math.floor(joinedTimestamp / 1000)}:R>` : null;
+        const joinedClause = joinedTag ? ` Joined ${joinedTag}.` : '';
+        const displayName = member.user?.tag
+            ?? member.user?.username
+            ?? member.displayName
+            ?? member.id;
+
+        if (!member.kickable) {
+            logger?.warn?.(`[autoban] Lacked permission to kick ${displayName} (${member.id}) in guild ${guildName} (${guildId}) — ${descriptor}.`);
+            moderationEvents?.insert({
+                type: 'autokick',
+                guildId,
+                userId: member.id,
+                matchedSource,
+                status: 'failed-permission',
+                reason,
+                timestamp: Date.now(),
+                joinedTimestamp,
+                usernameSnapshot: {
+                    username: member.user?.username ?? null,
+                    globalName: member.user?.globalName ?? null,
+                    displayName: member.displayName ?? null
+                }
+            });
+            if (cfg.notifyChannelId) {
+                const channel = await resolveLogChannel(guild ?? member.guild, cfg.notifyChannelId);
+                await safeNotify(
+                    channel,
+                    `⚠️ Could not auto-kick **${displayName}** in **${guildName}** (ID: ${guildId}) — missing permissions; ${descriptor}.${joinedClause}`,
+                    logger
+                );
+            }
+            if (cfg.notifyWebhooks.length) {
+                await safeWebhookNotify(
+                    cfg.notifyWebhooks,
+                    `⚠️ Could not auto-kick **${displayName}** in **${guildName}** (ID: ${guildId}) — missing permissions; ${descriptor}.${joinedClause}`,
+                    logger
+                );
+            }
+            return;
+        }
+
+        try {
+            await member.kick(reason);
+            logger?.info?.(`[autoban] Kicked ${displayName} (${member.id}) in guild ${guildName} (${guildId}) — ${descriptor}.`);
+            moderationEvents?.insert({
+                type: 'autokick',
+                guildId,
+                userId: member.id,
+                matchedSource,
+                status: 'kicked',
+                reason,
+                timestamp: Date.now(),
+                joinedTimestamp,
+                usernameSnapshot: {
+                    username: member.user?.username ?? null,
+                    globalName: member.user?.globalName ?? null,
+                    displayName: member.displayName ?? null
+                }
+            });
+
+            if (cfg.notifyChannelId) {
+                const channel = await resolveLogChannel(guild ?? member.guild, cfg.notifyChannelId);
+                await safeNotify(
+                    channel,
+                    `👢 Auto-kicked **${displayName}** in **${guildName}** (ID: ${guildId}) — ${descriptor}.${joinedClause}`,
+                    logger
+                );
+            }
+            if (cfg.notifyWebhooks.length) {
+                await safeWebhookNotify(
+                    cfg.notifyWebhooks,
+                    `👢 Auto-kicked **${displayName}** in **${guildName}** (ID: ${guildId}) — ${descriptor}.${joinedClause}`,
+                    logger
+                );
+            }
+        } catch (err) {
+            const errMessage = err?.message ?? err;
+            logger?.error?.(`[autoban] Failed to kick ${displayName} (${member.id}) in guild ${guildName} (${guildId}): ${errMessage}`);
+            moderationEvents?.insert({
+                type: 'autokick',
+                guildId,
+                userId: member.id,
+                matchedSource,
+                status: 'error',
+                reason: err?.message ?? String(err ?? 'unknown error'),
+                timestamp: Date.now(),
+                joinedTimestamp,
+                usernameSnapshot: {
+                    username: member.user?.username ?? null,
+                    globalName: member.user?.globalName ?? null,
+                    displayName: member.displayName ?? null
+                }
+            });
+            if (cfg.notifyChannelId) {
+                const channel = await resolveLogChannel(guild ?? member.guild, cfg.notifyChannelId);
+                await safeNotify(
+                    channel,
+                    `⚠️ Failed to auto-kick **${displayName}** in **${guildName}** (ID: ${guildId}) — ${errMessage}. ${descriptor}.${joinedClause}`,
+                    logger
+                );
+            }
+            if (cfg.notifyWebhooks.length) {
+                await safeWebhookNotify(
+                    cfg.notifyWebhooks,
+                    `⚠️ Failed to auto-kick **${displayName}** in **${guildName}** (ID: ${guildId}) — ${errMessage}. ${descriptor}.${joinedClause}`,
+                    logger
+                );
+            }
+        }
+    }
+
+    async function sweepGuildForStaleMembers(guildId, detail, cfg) {
+        if (!guildId) return;
+        const trackedRoleIds = [detail.unverifiedRoleId, detail.testRoleId]
+            .map(id => (typeof id === 'string' ? id.trim() : ''))
+            .filter(Boolean);
+        if (trackedRoleIds.length === 0) return;
+
+        let guild = null;
+        try {
+            guild = client.guilds.cache.get(guildId) ?? await client.guilds.fetch(guildId);
+        } catch (err) {
+            logger?.warn?.(`[autoban] Failed to fetch guild ${guildId} for stale role sweep: ${err?.message ?? err}`);
+            return;
+        }
+        if (!guild) return;
+
+        try {
+            await guild.members.fetch({ withPresences: false });
+        } catch (err) {
+            logger?.warn?.(`[autoban] Failed to fetch members for ${guild.name ?? guildId}: ${err?.message ?? err}`);
+            return;
+        }
+
+        const threshold = Date.now() - STALE_ROLE_THRESHOLD_MS;
+
+        for (const member of guild.members.cache.values()) {
+            if (!member || !member.roles?.cache) continue;
+            if (member.user?.bot) continue;
+
+            const hasUnverified = detail.unverifiedRoleId ? member.roles.cache.has(detail.unverifiedRoleId) : false;
+            const hasTestRole = detail.testRoleId ? member.roles.cache.has(detail.testRoleId) : false;
+            if (!hasUnverified && !hasTestRole) continue;
+
+            const joinedTimestamp = member.joinedTimestamp
+                ?? (member.joinedAt instanceof Date ? member.joinedAt.getTime() : null);
+            if (!joinedTimestamp) continue;
+            if (joinedTimestamp > threshold) continue;
+
+            await handleStaleMember(member, { guild, cfg, hasUnverified, hasTestRole, joinedTimestamp });
+        }
+    }
+
+    async function runRoleSweep() {
+        if (staleSweepState.running) return;
+        staleSweepState.running = true;
+        try {
+            const cfg = getConfig();
+            if (!cfg.enabled) {
+                return;
+            }
+            const targets = collectRoleSweepTargets(activeConfig);
+            if (!targets.size) {
+                return;
+            }
+            for (const [guildId, detail] of targets) {
+                await sweepGuildForStaleMembers(guildId, detail, cfg);
+            }
+        } catch (err) {
+            logger?.error?.(`[autoban] Stale role sweep failed: ${err?.message ?? err}`);
+        } finally {
+            staleSweepState.running = false;
+        }
+    }
+
+    client.on('squire:configUpdated', (nextConfig) => {
+        if (nextConfig && typeof nextConfig === 'object') {
+            activeConfig = nextConfig;
+            void runRoleSweep();
+        }
+    });
+
+    staleSweepState.timer = setInterval(() => {
+        void runRoleSweep();
+    }, ROLE_SWEEP_INTERVAL_MS);
+    staleSweepState.timer.unref?.();
+    void runRoleSweep();
+}
+
+function collectRoleSweepTargets(config) {
+    const targets = new Map();
+    if (!config || typeof config !== 'object') {
+        return targets;
+    }
+
+    const welcomeEntries = config.welcome && typeof config.welcome === 'object' ? config.welcome : {};
+    for (const [guildId, entry] of Object.entries(welcomeEntries)) {
+        if (!guildId) continue;
+        const roles = entry?.roles ?? {};
+        const unverifiedRoleId = roles?.unverifiedRoleId ? String(roles.unverifiedRoleId).trim() : '';
+        if (!unverifiedRoleId) continue;
+        const existing = targets.get(guildId) ?? { unverifiedRoleId: null, testRoleId: null };
+        existing.unverifiedRoleId = unverifiedRoleId;
+        targets.set(guildId, existing);
+    }
+
+    const overrideSource = config.autoban && typeof config.autoban === 'object' ? config.autoban.testRoleMap : null;
+    const testRoleMap = overrideSource && typeof overrideSource === 'object' ? overrideSource : {};
+    for (const [guildId, roleIdRaw] of Object.entries(testRoleMap)) {
+        if (!guildId) continue;
+        const roleId = typeof roleIdRaw === 'string' ? roleIdRaw.trim() : String(roleIdRaw ?? '').trim();
+        if (!roleId) continue;
+        const existing = targets.get(guildId) ?? { unverifiedRoleId: null, testRoleId: null };
+        existing.testRoleId = roleId;
+        targets.set(guildId, existing);
+    }
+
+    for (const [guildId, detail] of Array.from(targets.entries())) {
+        const normalizedUnverified = detail.unverifiedRoleId ? String(detail.unverifiedRoleId).trim() : '';
+        const normalizedTest = detail.testRoleId ? String(detail.testRoleId).trim() : '';
+        if (!normalizedUnverified && !normalizedTest) {
+            targets.delete(guildId);
+            continue;
+        }
+        targets.set(guildId, {
+            unverifiedRoleId: normalizedUnverified || null,
+            testRoleId: normalizedTest || null
+        });
+    }
+
+    return targets;
 }
 
 function normaliseWebhookUrls(value) {

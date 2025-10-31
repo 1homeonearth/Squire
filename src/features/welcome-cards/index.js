@@ -327,9 +327,14 @@ export function init({ client, logger, config }) {
             };
             const image = await buildWelcomeImage(member, headerConfig, logger);
 
+            const allowedMentions = { users: [member.id] };
+            if (roleMentions.length) {
+                allowedMentions.roles = Array.from(new Set(roleMentions));
+            }
+
             const payload = {
                 content: content || ' ',
-                allowedMentions: roleMentions.length ? { roles: roleMentions } : { parse: [] }
+                allowedMentions
             };
             if (image) {
                 payload.files = [image];

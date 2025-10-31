@@ -19,9 +19,12 @@ export function sanitizeWelcomeMessage(value) {
         return DEFAULT_WELCOME_MESSAGE;
     }
     const normalized = value.replace(/\r\n/g, '\n');
-    if (!normalized.trim()) {
+    const withLiteralBreaks = normalized.replace(/\\n/g, '\n');
+    if (!withLiteralBreaks.trim()) {
         return DEFAULT_WELCOME_MESSAGE;
     }
-    const limited = normalized.length > 2000 ? normalized.slice(0, 2000) : normalized;
+    const limited = withLiteralBreaks.length > 2000
+        ? withLiteralBreaks.slice(0, 2000)
+        : withLiteralBreaks;
     return limited;
 }

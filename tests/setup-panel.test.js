@@ -1,7 +1,7 @@
 import { expect, it } from 'vitest';
 import { ComponentType } from 'discord.js';
 
-import { buildLoggingView, buildWelcomeView } from '../src/features/setup/index.js';
+import { buildAutobouncerView, buildLoggingView, buildWelcomeView } from '../src/features/setup/index.js';
 
 it('buildLoggingView summarises mapping state and controls', async () => {
     const loggingGuildChannels = new Map([
@@ -131,5 +131,69 @@ it('buildWelcomeView surfaces role selections with role picker controls', async 
     expect(defaultOption?.default).toBe(true);
     const clearOption = (pickerData.options ?? []).find((option) => option.value === '__clear__');
     expect(clearOption?.default).toBe(false);
+});
+
+it('buildAutobouncerView summarises stale-role sweeps and exposes test role controls', async () => {
+    const loggingChannels = new Map([
+        ['log-channel', { id: 'log-channel', name: 'logs', isTextBased: () => true }]
+    ]);
+    const loggingGuild = {
+        id: '999',
+        name: 'Logging Guild',
+        channels: { cache: loggingChannels, fetch: async () => loggingChannels },
+        roles: { cache: new Map(), fetch: async () => new Map() }
+    };
+
+    const mainRoles = new Map([
+        ['unverified-role', { id: 'unverified-role', name: 'Unverified' }],
+        ['test-role', { id: 'test-role', name: 'QA Tester' }]
+    ]);
+    const mainGuild = {
+        id: '123',
+        name: 'Main Guild',
+        channels: { cache: new Map(), fetch: async () => new Map() },
+        roles: { cache: mainRoles, fetch: async () => mainRoles }
+    };
+
+    const client = {
+        guilds: {
+            cache: new Map([
+                ['999', loggingGuild],
+                ['123', mainGuild]
+            ]),
+            fetch: async (id) => client.guilds.cache.get(id)
+        }
+    };
+
+    const config = {
+        loggingServerId: '999',
+        mainServerIds: ['123'],
+        welcome: {
+            '123': {
+                roles: { unverifiedRoleId: 'unverified-role' }
+            }
+        },
+        autoban: {
+            enabled: true,
+            blockedUsernames: [],
+            notifyChannelId: 'log-channel',
+            testRoleMap: { '123': 'test-role' }
+        }
+    };
+
+    const view = await buildAutobouncerView({ config, client });
+    const embed = view.embeds[0];
+    const embedData = embed.data ?? embed.toJSON?.() ?? {};
+    const roleField = embedData.fields.find((field) => field.name === 'Role sweeps');
+    expect(roleField?.value).toContain('<@&unverified-role>');
+    expect(roleField?.value).toContain('<@&test-role>');
+
+    const selectRow = view.components.find((row) =>
+        row.components.some((component) => component.data?.custom_id === 'setup:autobouncer:pickTestRoleGuild')
+    );
+    expect(selectRow).toBeTruthy();
+    const picker = selectRow.components.find((component) => component.data?.custom_id === 'setup:autobouncer:pickTestRoleGuild');
+    const pickerData = picker.toJSON?.() ?? picker.data ?? {};
+    expect(pickerData.options?.some((option) => option.value === '123')).toBe(true);
 });
 

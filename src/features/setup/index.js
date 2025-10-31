@@ -162,6 +162,18 @@ function ensureConfigShape(config) {
     } else {
         config.autoban.notifyWebhookUrls = config.autoban.notifyWebhookUrls.map(String);
     }
+    if (!config.autoban.testRoleMap || typeof config.autoban.testRoleMap !== 'object') {
+        config.autoban.testRoleMap = {};
+    } else {
+        const cleaned = {};
+        for (const [guildId, roleId] of Object.entries(config.autoban.testRoleMap)) {
+            const gid = typeof guildId === 'string' ? guildId.trim() : String(guildId ?? '').trim();
+            const rid = typeof roleId === 'string' ? roleId.trim() : String(roleId ?? '').trim();
+            if (!gid || !rid) continue;
+            cleaned[gid] = rid;
+        }
+        config.autoban.testRoleMap = cleaned;
+    }
     config.autoban.notifyChannelId = config.autoban.notifyChannelId ? String(config.autoban.notifyChannelId) : null;
     config.autoban.scanBio = config.autoban.scanBio === false ? false : true;
 
@@ -2502,6 +2514,38 @@ async function handleAutobouncerInteraction({ interaction, entry, config, key, l
                     panelStore.set(key, { message, guildId: entryState.guildId ?? null, mode: 'default', context: {} });
                 } catch {}
             }
+        } else if (interaction.customId.startsWith('setup:autobouncer:testRoleModal:')) {
+            const parts = interaction.customId.split(':');
+            const guildId = parts[parts.length - 1] ?? null;
+            if (!guildId) {
+                await interaction.reply({ content: 'Guild selection expired. Please try again.', ephemeral: true }).catch(() => {});
+                return;
+            }
+            const raw = interaction.fields.getTextInputValue('setup:autobouncer:testRoleInput') ?? '';
+            const roleId = raw.trim();
+            if (!config.autoban.testRoleMap || typeof config.autoban.testRoleMap !== 'object') {
+                config.autoban.testRoleMap = {};
+            }
+            if (roleId) {
+                config.autoban.testRoleMap[guildId] = roleId;
+            } else {
+                delete config.autoban.testRoleMap[guildId];
+            }
+            saveConfig(config, logger);
+            const guild = await fetchGuild(client, guildId).catch(() => null);
+            const guildName = guild?.name ?? guildId;
+            const reply = roleId
+                ? `Set test role override for **${guildName}** to <@&${roleId}>.`
+                : `Cleared test role override for **${guildName}**.`;
+            await interaction.reply({ content: reply, ephemeral: true }).catch(() => {});
+            const entryState = panelStore.get(key);
+            if (entryState?.message) {
+                try {
+                    const view = await buildAutobouncerView({ config, client });
+                    const message = await entryState.message.edit(view);
+                    panelStore.set(key, { message, guildId: entryState.guildId ?? null, mode: 'default', context: {} });
+                } catch {}
+            }
         }
     }
     if (interaction.isStringSelectMenu()) {
@@ -2518,6 +2562,30 @@ async function handleAutobouncerInteraction({ interaction, entry, config, key, l
             const message = await interaction.update(view);
             panelStore.set(key, { message, guildId: entry?.guildId ?? null, mode: 'default', context: {} });
             await interaction.followUp({ content: choice === '__clear__' ? 'Autobouncer notifications disabled.' : 'Autobouncer notifications channel updated.', ephemeral: true }).catch(() => {});
+        } else if (parts[2] === 'pickTestRoleGuild') {
+            const guildId = interaction.values?.[0] ?? null;
+            if (!guildId || guildId === 'noop') {
+                await interaction.reply({ content: 'Select a server to update the test role override.', ephemeral: true }).catch(() => {});
+                return;
+            }
+            const map = config.autoban.testRoleMap && typeof config.autoban.testRoleMap === 'object'
+                ? config.autoban.testRoleMap
+                : {};
+            const existingRoleId = typeof map[guildId] === 'string' ? map[guildId] : '';
+            const modal = new ModalBuilder()
+            .setCustomId(`setup:autobouncer:testRoleModal:${guildId}`)
+            .setTitle('Set test role override')
+            .addComponents(
+                new ActionRowBuilder().addComponents(
+                    new TextInputBuilder()
+                    .setCustomId('setup:autobouncer:testRoleInput')
+                    .setLabel('Role ID (leave blank to clear)')
+                    .setStyle(TextInputStyle.Short)
+                    .setRequired(false)
+                    .setValue(existingRoleId ?? '')
+                )
+            );
+            await interaction.showModal(modal);
         }
     }
 }
@@ -2529,16 +2597,69 @@ async function buildAutobouncerView({ config, client }) {
     const loggingGuild = loggingGuildId ? await fetchGuild(client, loggingGuildId) : null;
     const channels = loggingGuild ? await collectTextChannels(loggingGuild) : [];
     const notifyChannelId = autobanCfg.notifyChannelId ?? null;
+    const testRoleMap = autobanCfg.testRoleMap && typeof autobanCfg.testRoleMap === 'object' ? autobanCfg.testRoleMap : {};
 
     const embed = new EmbedBuilder()
     .setTitle('Autobouncer setup')
-    .setDescription('Manage the keyword list used to automatically remove suspicious accounts.')
+    .setDescription('Manage the keyword list used to automatically remove suspicious accounts and stale-role sweeps.')
     .addFields(
         { name: 'Status', value: autobanCfg.enabled === false ? '🚫 Disabled' : '✅ Enabled', inline: true },
         { name: 'Logging channel', value: loggingGuild ? formatChannel(loggingGuild, notifyChannelId) : (notifyChannelId ? `<#${notifyChannelId}>` : 'Not configured'), inline: true },
         { name: 'Bio scanning', value: autobanCfg.scanBio === false ? '🚫 Disabled' : '✅ Enabled', inline: true },
         { name: 'Keywords', value: keywords.length ? keywords.map(k => `• ${k}`).slice(0, 10).join('\n') + (keywords.length > 10 ? `\n… ${keywords.length - 10} more` : '') : 'No keywords configured.', inline: false }
     );
+
+    const candidateGuildIds = new Set();
+    if (Array.isArray(config.mainServerIds)) {
+        for (const id of config.mainServerIds) {
+            if (id) candidateGuildIds.add(String(id));
+        }
+    }
+    if (config.welcome && typeof config.welcome === 'object') {
+        for (const id of Object.keys(config.welcome)) {
+            if (id) candidateGuildIds.add(String(id));
+        }
+    }
+    for (const id of Object.keys(testRoleMap)) {
+        if (id) candidateGuildIds.add(String(id));
+    }
+
+    const guildInfo = [];
+    const sortedIds = [...candidateGuildIds].filter(Boolean).sort((a, b) => a.localeCompare(b));
+    for (const guildId of sortedIds) {
+        const guild = await fetchGuild(client, guildId).catch(() => null);
+        const name = guild?.name ?? `Server ${guildId}`;
+        const welcomeEntry = config.welcome?.[guildId] ?? {};
+        const roles = welcomeEntry?.roles ?? {};
+        const unverifiedRoleId = roles?.unverifiedRoleId ? String(roles.unverifiedRoleId) : null;
+        const testRoleId = typeof testRoleMap[guildId] === 'string' ? testRoleMap[guildId] : null;
+        guildInfo.push({ guildId, guild, name, unverifiedRoleId, testRoleId });
+    }
+    guildInfo.sort((a, b) => a.name.localeCompare(b.name));
+
+    const summaryTargets = guildInfo.filter(info => info.unverifiedRoleId || info.testRoleId);
+    let summaryValue;
+    if (summaryTargets.length) {
+        const lines = summaryTargets.map(info => {
+            const unverifiedDisplay = info.unverifiedRoleId
+                ? formatRole(info.guild, info.unverifiedRoleId)
+                : 'Not configured';
+            const testDisplay = info.testRoleId
+                ? formatRole(info.guild, info.testRoleId)
+                : 'Not configured';
+            return `• **${truncateName(info.name, 60)}** — unverified: ${unverifiedDisplay} • test: ${testDisplay}`;
+        });
+        const limited = lines.slice(0, 10);
+        summaryValue = limited.join('\n');
+        if (lines.length > limited.length) {
+            summaryValue += `\n… ${lines.length - limited.length} more`;
+        }
+        summaryValue = summaryValue.slice(0, 1024);
+    } else {
+        summaryValue = 'No tracked roles configured yet. Configure the welcome autorole or set a test role override below.';
+    }
+
+    embed.addFields({ name: 'Role sweeps', value: summaryValue, inline: false });
 
     const buttons = new ActionRowBuilder().addComponents(
         new ButtonBuilder().setCustomId('setup:autobouncer:toggle').setLabel(autobanCfg.enabled === false ? 'Enable' : 'Disable').setStyle(ButtonStyle.Secondary),
@@ -2566,7 +2687,33 @@ async function buildAutobouncerView({ config, client }) {
         channelMenu.addOptions({ label: 'No available channels', value: 'noop', default: true });
     }
 
-    const components = [buttons, new ActionRowBuilder().addComponents(channelMenu)];
+    const testRoleMenu = new StringSelectMenuBuilder()
+    .setCustomId('setup:autobouncer:pickTestRoleGuild')
+    .setPlaceholder(guildInfo.length ? 'Select a server to set test role…' : 'No servers available')
+    .setMinValues(1)
+    .setMaxValues(1)
+    .setDisabled(guildInfo.length === 0);
+
+    if (guildInfo.length) {
+        testRoleMenu.addOptions(guildInfo.slice(0, 25).map(info => {
+            const description = info.testRoleId
+                ? `Override → ${formatRole(info.guild, info.testRoleId)}`.slice(0, 100)
+                : 'No test role override set';
+            return {
+                label: truncateName(info.name, 100),
+                description,
+                value: info.guildId
+            };
+        }));
+    } else {
+        testRoleMenu.addOptions({ label: 'No servers available', value: 'noop', default: true });
+    }
+
+    const components = [
+        buttons,
+        new ActionRowBuilder().addComponents(channelMenu),
+        new ActionRowBuilder().addComponents(testRoleMenu)
+    ];
     appendHomeButtonRow(components);
 
     return { embeds: [embed], components };
