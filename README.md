@@ -4,6 +4,24 @@ Squire is a multi-feature Discord bot that keeps the Unbreakable Crown server ne
 
 The project is written in modern ECMAScript modules on top of [`discord.js` v14](https://discord.js.org/#/docs/discord.js/main/general/welcome) and runs on Node.js 22 or newer. Feature modules live in `src/features/*` and are dynamically discovered at startup so that functionality can grow without touching the core runtime.
 
+## Getting the code
+
+Clone the repository with Git:
+
+```bash
+export SQUIRE_REPO="https://github.com/Unbreakable-Crown/Squire.git"
+git clone "$SQUIRE_REPO"
+cd Squire
+```
+
+Or fetch an archive without Git:
+
+```bash
+export SQUIRE_TARBALL="https://github.com/Unbreakable-Crown/Squire/archive/refs/heads/main.tar.gz"
+curl -L "$SQUIRE_TARBALL" | tar -xz
+cd Squire-main
+```
+
 ## Features
 
 - **Logging forwarder** (`src/features/logging-forwarder/`)
@@ -36,7 +54,7 @@ src/
     auto-bouncer/
     rainbow-bridge/
     setup/
-config.sample.json      # Copy to config.json and fill with production secrets
+config.sample.json      # Template resolved by scripts/render-config.mjs using environment variables
 squire.db.json          # LokiJS JSON dump (created on first run if not present)
 ```
 
@@ -50,6 +68,87 @@ squire.db.json          # LokiJS JSON dump (created on first run if not present)
 
 For production hosts, the `squirectl` helper wraps deployment tasks (fetching from `origin/main`, running `npm ci`, rendering config from environment, and managing the systemd unit).
 
+## Deployment tracks
+
+### Track 1 — Local collaborator workstation
+
+Local collaborators should keep secrets out of source control by exporting them into the current shell before rendering config and starting the bot:
+
+```bash
+export DISCORD_TOKEN="paste-your-discord-bot-token"
+export DISCORD_APPLICATION_ID="paste-your-application-id"
+export WEBHOOK_SERVER_1129906023084343346="https://discord.com/api/webhooks/..."
+export WEBHOOK_SERVER_1391983429553492049="https://discord.com/api/webhooks/..."
+export RAINBOW_BRIDGE_MAIN_ONE_WEBHOOK="https://discord.com/api/webhooks/..."
+export RAINBOW_BRIDGE_MAIN_TWO_WEBHOOK="https://discord.com/api/webhooks/..."
+export AUTOBAN_NOTIFY_WEBHOOK="https://discord.com/api/webhooks/..."
+NODE_ENV=development npm ci
+node scripts/render-config.mjs
+npm start
+```
+
+The one-liner `NODE_ENV=development npm ci && node scripts/render-config.mjs && npm start` works once the exports are present. Re-run `node scripts/render-config.mjs` any time you change environment variables so the working `config.json` stays in sync.
+
+### Track 2 — Codex cloud environment
+
+The Codex cloud runner is intended for automated validation (lint + tests) without touching production secrets. Inject credentials through the task environment, then execute the CI-style pipeline:
+
+```bash
+export DISCORD_TOKEN="${DISCORD_TOKEN:?set in cloud secret store}"
+export DISCORD_APPLICATION_ID="${DISCORD_APPLICATION_ID:?set in cloud secret store}"
+export WEBHOOK_SERVER_1129906023084343346="${WEBHOOK_SERVER_1129906023084343346:?set in cloud secret store}"
+export WEBHOOK_SERVER_1391983429553492049="${WEBHOOK_SERVER_1391983429553492049:?set in cloud secret store}"
+export RAINBOW_BRIDGE_MAIN_ONE_WEBHOOK="${RAINBOW_BRIDGE_MAIN_ONE_WEBHOOK:?set in cloud secret store}"
+export RAINBOW_BRIDGE_MAIN_TWO_WEBHOOK="${RAINBOW_BRIDGE_MAIN_TWO_WEBHOOK:?set in cloud secret store}"
+export AUTOBAN_NOTIFY_WEBHOOK="${AUTOBAN_NOTIFY_WEBHOOK:?set in cloud secret store}"
+NODE_ENV=production npm ci
+node scripts/render-config.mjs
+npm run lint && npm test && npm run build
+```
+
+The condensed Codex check-in command is:
+
+```bash
+NODE_ENV=production npm ci && node scripts/render-config.mjs && npm run lint && npm test && npm run build
+```
+
+Use `squirectl status` if you need to confirm the live deployment state from cloud automation without mutating it:
+
+```bash
+export SQUIRE_HOST="mcs.example.net"
+ssh -p 123 squire@"$SQUIRE_HOST" "squirectl status"
+```
+
+### Track 3 — Systemd production host
+
+On the Debian 13 production host, environment variables are sourced by systemd (for example via `/etc/systemd/system/squire.service.d/env.conf`). After editing the environment drop-in, reload systemd and use `squirectl` for lifecycle management:
+
+```bash
+sudo systemctl daemon-reload
+sudo systemctl restart squire.service
+```
+
+Routine deployments use the helper directly:
+
+```bash
+export SQUIRE_HOST="mcs.example.net"
+ssh -p 123 squire@"$SQUIRE_HOST" "squirectl deploy"
+```
+
+The script performs `git fetch --all --prune`, `git reset --hard origin/main`, `npm ci --omit=dev`, runs `node ./scripts/render-config.mjs`, and restarts the `squire` systemd unit while showing a concise status tail. Operators can check health without redeploying:
+
+```bash
+ssh -p 123 squire@"$SQUIRE_HOST" "squirectl status"
+```
+
+If you must restart without pulling new code, run:
+
+```bash
+ssh -p 123 squire@"$SQUIRE_HOST" "squirectl restart"
+```
+
+Always export new secret values into the unit environment before invoking any `squirectl` command so the render step can resolve them.
+
 ## Getting started
 
 1. **Install dependencies**
@@ -58,15 +157,29 @@ For production hosts, the `squirectl` helper wraps deployment tasks (fetching fr
    npm install
    ```
 
-2. **Create `config.json`**
+2. **Provide secrets via environment variables**
 
    ```bash
-   cp config.sample.json config.json
+   export DISCORD_TOKEN="paste-your-discord-bot-token"
+   export DISCORD_APPLICATION_ID="paste-your-application-id"
+   export WEBHOOK_SERVER_1129906023084343346="https://discord.com/api/webhooks/..."
+   export WEBHOOK_SERVER_1391983429553492049="https://discord.com/api/webhooks/..."
+   export RAINBOW_BRIDGE_MAIN_ONE_WEBHOOK="https://discord.com/api/webhooks/..."
+   export RAINBOW_BRIDGE_MAIN_TWO_WEBHOOK="https://discord.com/api/webhooks/..."
+   export AUTOBAN_NOTIFY_WEBHOOK="https://discord.com/api/webhooks/..."
    ```
 
-   Edit the file and populate it with your bot token, application ID, logging server, and per-guild webhook mapping. See the [configuration reference](#configuration-reference) for details on every field.
+   Non-secret values (IDs, sampling values, etc.) can stay in `config.sample.json` or be overridden after rendering.
 
-3. **Run the bot**
+3. **Render `config.json` from the environment**
+
+   ```bash
+   node scripts/render-config.mjs
+   ```
+
+   The script deep-merges any existing `config.json`, resolves `$ENV{...}` placeholders, and fails fast if required env variables are missing. Update non-secret settings by editing `config.json` after rendering.
+
+4. **Run the bot**
 
    ```bash
    npm start
@@ -76,7 +189,7 @@ For production hosts, the `squirectl` helper wraps deployment tasks (fetching fr
 
 ## Configuration reference
 
-All configuration lives in `config.json`. Secrets can alternatively be provided through environment variables (useful for CI/CD); environment values take precedence. Relevant keys:
+All configuration lives in `config.json`, which is materialised by `scripts/render-config.mjs` using environment variables for every secret. Set secrets (tokens, webhooks, and other sensitive values) through the environment, then render the file. Relevant keys:
 
 | Key | Description |
 | --- | ----------- |
