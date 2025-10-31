@@ -29,6 +29,46 @@ function collectCandidateNames(member) {
     return [...names].map(n => n.toLowerCase());
 }
 
+function findTextChannelByName(guild, name) {
+    if (!guild || !name) return null;
+    const lower = name.toLowerCase();
+    return guild.channels?.cache?.find?.(ch => ch?.isTextBased?.() && ch.name?.toLowerCase?.() === lower) ?? null;
+}
+
+async function resolveWelcomeChannelFromConfig(guild, config) {
+    if (!guild) return null;
+    const entry = config?.welcome?.[guild.id] ?? null;
+    const configuredId = entry?.channelId ?? null;
+    if (configuredId) {
+        const resolved = await resolveLogChannel(guild, configuredId);
+        if (resolved) {
+            return resolved;
+        }
+    }
+    const fallback = findTextChannelByName(guild, 'welcome');
+    if (fallback) return fallback;
+    return guild.systemChannel ?? null;
+}
+
+async function collectScreeningCandidates(member, { includeBio, logger }) {
+    const candidates = collectCandidateNames(member).map(value => ({ value, source: 'name' }));
+    if (!includeBio) {
+        return candidates;
+    }
+    try {
+        if (member?.user?.fetch) {
+            await member.user.fetch(true);
+        }
+    } catch (err) {
+        logger?.warn?.(`[autoban] Failed to refresh user profile for ${member.user?.tag ?? member.id}: ${err?.message ?? err}`);
+    }
+    const bio = member?.user?.bio;
+    if (typeof bio === 'string' && bio.trim()) {
+        candidates.push({ value: bio.toLowerCase(), source: 'bio' });
+    }
+    return candidates;
+}
+
 async function resolveLogChannel(guild, channelId) {
     if (!channelId) return null;
     const existing = guild.channels.cache.get(channelId);
@@ -68,6 +108,15 @@ async function safeNotify(channel, message, logger) {
         await channel.send(timestampContent(message));
     } catch (err) {
         logger?.warn?.(`[autoban] Failed to notify in ${channel.id}: ${err?.message ?? err}`);
+    }
+}
+
+async function safePlainChannelNotify(channel, content, logger) {
+    if (!channel || !content) return;
+    try {
+        await channel.send({ content, allowedMentions: { parse: [] } });
+    } catch (err) {
+        logger?.warn?.(`[autoban] Failed to post welcome notice in ${channel.id}: ${err?.message ?? err}`);
     }
 }
 
@@ -115,7 +164,8 @@ export function init({ client, logger, config, db }) {
             notifyWebhooks: normaliseWebhookUrls(autobanCfg.notifyWebhookUrls ?? autobanCfg.notifyWebhookUrl),
             deleteMessageSeconds: Number.isInteger(autobanCfg.deleteMessageSeconds)
                 ? Math.max(0, autobanCfg.deleteMessageSeconds)
-                : 0
+                : 0,
+            scanBio: autobanCfg.scanBio === false ? false : true
         };
     }
 
@@ -126,6 +176,7 @@ export function init({ client, logger, config, db }) {
         logger?.warn?.('[autoban] No blocked username terms configured; feature will not run until configured.');
     } else {
         logger?.info?.(`[autoban] Watching for ${initial.blockedTerms.length} blocked term(s).`);
+        logger?.info?.(`[autoban] Profile bio scanning ${initial.scanBio ? 'enabled' : 'disabled'}.`);
     }
 
     client.on('guildMemberAdd', async (member) => {
@@ -137,13 +188,25 @@ export function init({ client, logger, config, db }) {
 
             if (!cfg.blockedTerms.length) return;
 
-            const names = collectCandidateNames(member);
-            if (names.length === 0) return;
+            const candidates = await collectScreeningCandidates(member, { includeBio: cfg.scanBio, logger });
+            if (candidates.length === 0) return;
 
-            const matchedTerm = cfg.blockedTerms.find(term => names.some(name => name.includes(term)));
+            let matchedTerm = null;
+            let matchedSource = null;
+            for (const term of cfg.blockedTerms) {
+                const match = candidates.find(entry => entry.value.includes(term));
+                if (match) {
+                    matchedTerm = term;
+                    matchedSource = match.source;
+                    break;
+                }
+            }
+
             if (!matchedTerm) return;
 
-            const reason = `Auto-ban: username contained "${matchedTerm}"`;
+            const reason = matchedSource === 'bio'
+                ? `Auto-ban: profile bio contained "${matchedTerm}"`
+                : `Auto-ban: username contained "${matchedTerm}"`;
 
             const guildName = member.guild?.name ?? 'Unknown Server';
             const guildId = member.guild?.id ?? 'unknown';
@@ -155,6 +218,7 @@ export function init({ client, logger, config, db }) {
                     guildId: member.guild?.id ?? null,
                     userId: member.id,
                     matchedTerm,
+                    matchedSource,
                     status: 'failed-permission',
                     reason,
                     timestamp: Date.now(),
@@ -182,15 +246,18 @@ export function init({ client, logger, config, db }) {
                 return;
             }
 
+            client.emit('squire:autoban:pending', { guildId: member.guild?.id, userId: member.id });
+
             await member.ban({ reason, deleteMessageSeconds: cfg.deleteMessageSeconds });
 
-            logger?.info?.(`[autoban] Banned ${member.user?.tag ?? member.id} (${member.id}) in guild ${guildName} (${guildId}) — matched term "${matchedTerm}".`);
+            logger?.info?.(`[autoban] Banned ${member.user?.tag ?? member.id} (${member.id}) in guild ${guildName} (${guildId}) — ${matchedSource === 'bio' ? 'profile bio' : 'name'} matched "${matchedTerm}".`);
 
             moderationEvents?.insert({
                 type: 'autoban',
                 guildId: member.guild?.id ?? null,
                 userId: member.id,
                 matchedTerm,
+                matchedSource,
                 status: 'banned',
                 reason,
                 timestamp: Date.now(),
@@ -205,17 +272,22 @@ export function init({ client, logger, config, db }) {
                 const notifyChannel = await resolveLogChannel(member.guild, cfg.notifyChannelId);
                 await safeNotify(
                     notifyChannel,
-                    `🚫 Auto-banned **${member.user?.tag ?? member.id}** in **${guildName}** (ID: ${guildId}) — username matched "${matchedTerm}".`,
+                    `🚫 Auto-banned **${member.user?.tag ?? member.id}** in **${guildName}** (ID: ${guildId}) — ${matchedSource === 'bio' ? 'profile bio' : 'name'} matched "${matchedTerm}".`,
                     logger
                 );
             }
             if (cfg.notifyWebhooks.length) {
                 await safeWebhookNotify(
                     cfg.notifyWebhooks,
-                    `🚫 Auto-banned **${member.user?.tag ?? member.id}** in **${guildName}** (ID: ${guildId}) — username matched "${matchedTerm}".`,
+                    `🚫 Auto-banned **${member.user?.tag ?? member.id}** in **${guildName}** (ID: ${guildId}) — ${matchedSource === 'bio' ? 'profile bio' : 'name'} matched "${matchedTerm}".`,
                     logger
                 );
             }
+
+            const welcomeChannel = await resolveWelcomeChannelFromConfig(member.guild, config);
+            await safePlainChannelNotify(welcomeChannel, 'Autobouncer banned a user from even trying to get in.', logger);
+
+            client.emit('squire:autoban:banned', { guildId: member.guild?.id, userId: member.id });
         } catch (err) {
             logger?.error?.(`[autoban] Failed while processing new member ${member.id}: ${err?.message ?? err}`);
             moderationEvents?.insert({
@@ -232,6 +304,7 @@ export function init({ client, logger, config, db }) {
                     displayName: member.displayName ?? null
                 }
             });
+            client.emit('squire:autoban:failed', { guildId: member.guild?.id, userId: member.id });
         }
     });
 }

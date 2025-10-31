@@ -59,6 +59,7 @@ describe('auto-bouncer', () => {
             expect(events.data).toHaveLength(1);
             expect(events.data[0].status).toBe('banned');
             expect(events.data[0].matchedTerm).toBe('mega');
+            expect(events.data[0].matchedSource).toBe('name');
             expect(events.data[0].userId).toBe('2');
         } finally {
             await cleanup();
@@ -98,6 +99,50 @@ describe('auto-bouncer', () => {
             expect(events.data).toHaveLength(1);
             expect(events.data[0].status).toBe('failed-permission');
             expect(events.data[0].matchedTerm).toBe('link');
+            expect(events.data[0].matchedSource).toBe('name');
+        } finally {
+            await cleanup();
+        }
+    });
+
+    it('bans members when bio matches blocked term', async () => {
+        const { db, cleanup } = await createTempDb();
+
+        try {
+            const client = new EventEmitter();
+            const logger = { info() {}, warn() {}, error() {} };
+
+            await initAutoBouncer({
+                client,
+                logger,
+                config: { autoban: { enabled: true, blockedUsernames: ['mega'], scanBio: true } },
+                db
+            });
+
+            const guild = { id: 'bio-guild', channels: { cache: new Map(), fetch: async () => null } };
+
+            const member = {
+                id: 'bio-user',
+                user: {
+                    username: 'friendly',
+                    tag: 'friendly#9999',
+                    bio: 'I share mega links everywhere',
+                    async fetch() { return this; }
+                },
+                displayName: 'friendly',
+                guild,
+                roles: { cache: { some: () => false } },
+                bannable: true,
+                ban: async () => {}
+            };
+
+            client.emit('guildMemberAdd', member);
+            await new Promise((resolve) => setTimeout(resolve, 10));
+
+            const events = ensureCollection(db, 'moderation_events');
+            expect(events.data).toHaveLength(1);
+            expect(events.data[0].matchedTerm).toBe('mega');
+            expect(events.data[0].matchedSource).toBe('bio');
         } finally {
             await cleanup();
         }

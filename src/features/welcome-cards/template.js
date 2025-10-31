@@ -1,4 +1,6 @@
-export const DEFAULT_WELCOME_MESSAGE = 'Welcome {{user}} to {{guild}}!\nPlease read our {{rules}}, select your {{roles}}, and then {{verify}} to unlock the full server.';
+export const LEGACY_DEFAULT_WELCOME_MESSAGE = 'Welcome {{user}} to {{guild}}!\nPlease read our {{rules}}, select your {{roles}}, and then {{verify}} to unlock the full server.';
+
+export const DEFAULT_WELCOME_MESSAGE = `${LEGACY_DEFAULT_WELCOME_MESSAGE}\n`;
 
 export const WELCOME_TEMPLATE_PLACEHOLDERS = [
     { token: '{{user}}', description: 'Mentions the new member.' },
@@ -16,9 +18,10 @@ export function sanitizeWelcomeMessage(value) {
     if (typeof value !== 'string') {
         return DEFAULT_WELCOME_MESSAGE;
     }
-    const normalized = value.replace(/\r\n/g, '\n').trim();
-    if (!normalized) {
+    const normalized = value.replace(/\r\n/g, '\n');
+    if (!normalized.trim()) {
         return DEFAULT_WELCOME_MESSAGE;
     }
-    return normalized.length > 2000 ? normalized.slice(0, 2000) : normalized;
+    const limited = normalized.length > 2000 ? normalized.slice(0, 2000) : normalized;
+    return limited;
 }
