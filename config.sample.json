@@ -1,11 +1,11 @@
 {
   "token": "$ENV{DISCORD_TOKEN}",
-  "applicationId": "$ENV{DISCORD_APPLICATION_ID}",
+  "applicationId": "$ENV{APPLICATION_ID}",
   "dbPath": "./squire.db.json",
   "sampleRate": 1.0,
   "forwardBots": true,
   "debugLevel": "info",
-  "loggingServerId": "1431923234567360542",
+  "loggingServerId": "$ENV{LOGGING_SERVER_ID}",
   "featureOrder": [
     "setup",
     "auto-bouncer",
@@ -13,86 +13,25 @@
     "rainbow-bridge",
     "welcome-cards"
   ],
-  "mapping": {
-    "1129906023084343346": "$ENV{WEBHOOK_SERVER_1129906023084343346}",
-    "1391983429553492049": "$ENV{WEBHOOK_SERVER_1391983429553492049}"
-  },
-  "loggingChannels": {
-    "messages": "123456789012345678",
-    "moderation": "234567890123456789",
-    "joins": "345678901234567890",
-    "system": "456789012345678901"
-  },
+  "mapping": "$ENV{MAPPING_JSON}",
+  "loggingChannels": "$ENV{LOGGING_CHANNELS_JSON}",
   "loggingWebhookMeta": {},
-  "excludeChannels": {
-    "1129906023084343346": [
-      "123456789012345678",
-      "234567890123456789"
-    ]
-  },
-  "excludeCategories": {
-    "1129906023084343346": [
-      "1148738833643470949",
-      "1129908986133631097",
-      "1393328897881411684"
-    ],
-    "1391983429553492049": [
-      "1391985969904881704",
-      "1391984629606776872",
-      "1391985340780253185"
-    ],
-    "1421907917459951696": [
-      "1421909029755817996",
-      "1421909022251942048",
-      "1421909023434735720"
-    ],
-    "1413887559695597740": [
-      "1413888221246652556"
-    ]
-  },
+  "excludeChannels": "$ENV{EXCLUDE_CHANNELS_JSON}",
+  "excludeCategories": "$ENV{EXCLUDE_CATEGORIES_JSON}",
   "rainbowBridge": {
     "forwardBots": true,
-    "bridges": {
-      "main-halls": {
-        "name": "Main Halls",
-        "channels": [
-          {
-            "guildId": "1129906023084343346",
-            "channelId": "999999999999999999",
-            "webhookUrl": "$ENV{RAINBOW_BRIDGE_MAIN_ONE_WEBHOOK}"
-          },
-          {
-            "guildId": "1391983429553492049",
-            "channelId": "111111111111111111",
-            "webhookUrl": "$ENV{RAINBOW_BRIDGE_MAIN_TWO_WEBHOOK}"
-          }
-        ]
-      }
-    }
+    "bridges": "$ENV{RAINBOW_BRIDGE_BRIDGES_JSON}"
   },
   "autoban": {
     "enabled": true,
     "blockedUsernames": ["mega", "megas", "link", "links"],
-    "notifyChannelId": "987654321098765432",
+    "notifyChannelId": "$ENV{AUTOBAN_NOTIFY_CHANNEL_ID}",
     "notifyWebhookUrls": [
       "$ENV{AUTOBAN_NOTIFY_WEBHOOK}"
     ],
     "deleteMessageSeconds": 0
   },
-  "mainServerIds": [
-    "1129906023084343346",
-    "1391983429553492049"
-  ],
-  "welcome": {
-    "1129906023084343346": {
-      "channelId": "555555555555555555",
-      "message": "Welcome {{user}} to {{guild}}!\nPlease read our {{rules}}, select your {{roles}}, and then {{verify}} to unlock the full server.",
-      "mentions": {
-        "rules": "666666666666666666",
-        "roles": "777777777777777777",
-        "verify": "888888888888888888"
-      }
-    }
-  }
+  "mainServerIds": "$ENV{MAIN_SERVER_IDS_JSON}",
+  "welcome": "$ENV{WELCOME_CONFIG_JSON}"
 }
 

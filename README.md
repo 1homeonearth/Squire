@@ -194,8 +194,13 @@ Every change is persisted to `config.json`, so redeploys and restarts keep the c
 | `APPLICATION_ID` | Overrides `config.applicationId`. |
 | `LOGGING_SERVER_ID` | Overrides `config.loggingServerId`. |
 | `MAPPING_JSON` | JSON string (object) that replaces `config.mapping`. |
+| `LOGGING_CHANNELS_JSON` | JSON object overriding `config.loggingChannels`. |
 | `EXCLUDE_CHANNELS_JSON` | JSON object overriding `config.excludeChannels`. |
 | `EXCLUDE_CATEGORIES_JSON` | JSON object overriding `config.excludeCategories`. |
+| `RAINBOW_BRIDGE_BRIDGES_JSON` | JSON object overriding `config.rainbowBridge.bridges`. |
+| `MAIN_SERVER_IDS_JSON` | JSON array overriding `config.mainServerIds`. |
+| `WELCOME_CONFIG_JSON` | JSON object overriding `config.welcome`. |
+| `AUTOBAN_NOTIFY_CHANNEL_ID` | Channel ID string overriding `config.autoban.notifyChannelId`. |
 | `AUTOBAN_CONFIG_JSON` | JSON object overriding the entire `config.autoban` block. |
 
 ## Managing slash commands
