@@ -7,6 +7,7 @@ import {
     ButtonBuilder,
     ButtonStyle,
     StringSelectMenuBuilder,
+    RoleSelectMenuBuilder,
     ModalBuilder,
     TextInputBuilder,
     TextInputStyle,
@@ -1263,19 +1264,6 @@ async function collectCategories(guild) {
     }
 }
 
-async function collectRoles(guild) {
-    if (!guild) return [];
-    try {
-        const collection = await guild.roles.fetch();
-        return collection
-        .filter(role => role && role.id !== guild.id)
-        .map(role => role)
-        .sort((a, b) => (b.position ?? 0) - (a.position ?? 0));
-    } catch {
-        return [];
-    }
-}
-
 function appendHomeButtonRow(components) {
     components.push(new ActionRowBuilder().addComponents(
         new ButtonBuilder()
@@ -1398,6 +1386,28 @@ async function handleWelcomeInteraction({ interaction, entry, config, client, ke
             return;
         }
 
+        if (action === 'clearRole') {
+            const entryCfg = ensureWelcomeEntry();
+            if (!entryCfg) {
+                await interaction.reply({ content: 'Select a server to configure first.', ephemeral: true });
+                return;
+            }
+            const target = interaction.customId.split(':')[3];
+            if (!['unverifiedRoleId', 'verifiedRoleId', 'crossVerifiedRoleId', 'moderatorRoleId'].includes(target)) {
+                await interaction.reply({ content: 'Unsupported role selector.', ephemeral: true });
+                return;
+            }
+            const hadRole = Boolean(entryCfg.roles[target]);
+            entryCfg.roles[target] = null;
+            saveConfig(config, logger);
+            const view = await buildWelcomeView({ config, client, guild: targetGuild, mode: 'default', context: { availableGuildIds } });
+            const message = await interaction.update(view);
+            storePanelState(message, 'default', {});
+            const text = hadRole ? 'Role cleared.' : 'No role was configured to clear.';
+            await interaction.followUp({ content: text, ephemeral: true }).catch(() => {});
+            return;
+        }
+
         switch (action) {
             case 'editMessage': {
                 const entryCfg = ensureWelcomeEntry();
@@ -1487,7 +1497,7 @@ async function handleWelcomeInteraction({ interaction, entry, config, client, ke
         return;
     }
 
-    if (interaction.isStringSelectMenu()) {
+    if (interaction.isAnySelectMenu()) {
         const parts = interaction.customId.split(':');
         const action = parts[2];
         if (action === 'selectGuild') {
@@ -1540,8 +1550,10 @@ async function handleWelcomeInteraction({ interaction, entry, config, client, ke
                 await interaction.reply({ content: 'Select a server to configure first.', ephemeral: true });
                 return;
             }
-            const choice = interaction.values?.[0] ?? null;
-            const nextRoleId = choice && choice !== '__clear__' && choice !== 'noop' ? choice : null;
+            const choice = Array.isArray(interaction.values) && interaction.values.length
+                ? interaction.values[0]
+                : null;
+            const nextRoleId = choice && choice !== 'noop' ? choice : null;
             if (['unverifiedRoleId', 'verifiedRoleId', 'crossVerifiedRoleId', 'moderatorRoleId'].includes(target)) {
                 entryCfg.roles[target] = nextRoleId;
                 saveConfig(config, logger);
@@ -1600,7 +1612,7 @@ async function buildWelcomeView({ config, client, guild, mode, context }) {
     if (selectedGuild && mode === 'selectChannel') {
         helpLines.unshift('• Choose the desired channel from the dropdown that just appeared, then the summary will refresh automatically.');
     } else if (selectedGuild && mode === 'selectRole') {
-        helpLines.unshift('• Pick the appropriate role from the dropdown that just appeared. Clearing the selection will remove the configured role.');
+        helpLines.unshift('• Pick the appropriate role from the dropdown that just appeared. Use the **Clear selection** button to remove the configured role.');
     }
 
     const helpFieldValue = helpLines.join('\n');
@@ -1611,14 +1623,14 @@ async function buildWelcomeView({ config, client, guild, mode, context }) {
     .addFields(
         { name: 'Selected server', value: selectedGuild ? `${selectedGuild.name} (${selectedGuild.id})` : 'Select a server using the menu below.', inline: false },
         { name: 'Module status', value: welcomeEntry.enabled ? '✅ Enabled' : '🚫 Disabled', inline: true },
-        { name: 'Welcome channel', value: selectedGuild ? formatChannel(selectedGuild, welcomeEntry.channelId) : 'Not configured', inline: true },
-        { name: 'Rules mention', value: selectedGuild ? mentionToDisplay(selectedGuild, mentionMap.rules) : 'Not configured', inline: true },
-        { name: 'Roles mention', value: selectedGuild ? mentionToDisplay(selectedGuild, mentionMap.roles) : 'Not configured', inline: true },
-        { name: 'Verify mention', value: selectedGuild ? mentionToDisplay(selectedGuild, mentionMap.verify) : 'Not configured', inline: true },
-        { name: 'Autorole (unverified)', value: selectedGuild ? formatRole(selectedGuild, welcomeEntry.roles.unverifiedRoleId) : 'Not configured', inline: true },
-        { name: 'Verified role (reference)', value: selectedGuild ? formatRole(selectedGuild, welcomeEntry.roles.verifiedRoleId) : 'Not configured', inline: true },
-        { name: 'Cross-verified role', value: selectedGuild ? formatRole(selectedGuild, welcomeEntry.roles.crossVerifiedRoleId) : 'Not configured', inline: true },
-        { name: 'Moderator ping role', value: selectedGuild ? formatRole(selectedGuild, welcomeEntry.roles.moderatorRoleId) : 'Not configured', inline: true },
+        { name: 'Welcome channel', value: formatChannel(selectedGuild, welcomeEntry.channelId), inline: true },
+        { name: 'Rules mention', value: mentionToDisplay(selectedGuild, mentionMap.rules), inline: true },
+        { name: 'Roles mention', value: mentionToDisplay(selectedGuild, mentionMap.roles), inline: true },
+        { name: 'Verify mention', value: mentionToDisplay(selectedGuild, mentionMap.verify), inline: true },
+        { name: 'Autorole (unverified)', value: formatRole(selectedGuild, welcomeEntry.roles.unverifiedRoleId), inline: true },
+        { name: 'Verified role (reference)', value: formatRole(selectedGuild, welcomeEntry.roles.verifiedRoleId), inline: true },
+        { name: 'Cross-verified role', value: formatRole(selectedGuild, welcomeEntry.roles.crossVerifiedRoleId), inline: true },
+        { name: 'Moderator ping role', value: formatRole(selectedGuild, welcomeEntry.roles.moderatorRoleId), inline: true },
         { name: 'Pre-image text', value: messageFieldValue, inline: false },
         { name: 'Available placeholders', value: placeholderFieldValue, inline: false },
         { name: 'Help', value: helpFieldValue, inline: false }
@@ -1714,28 +1726,23 @@ async function buildWelcomeView({ config, client, guild, mode, context }) {
 
     if (mode === 'selectRole' && selectedGuild) {
         const target = context?.target;
-        const roles = await collectRoles(selectedGuild);
-        const menu = new StringSelectMenuBuilder()
+        const currentRoleId = target ? welcomeEntry.roles[target] ?? null : null;
+        const menu = new RoleSelectMenuBuilder()
         .setCustomId(`setup:welcome:applyRole:${target}`)
         .setPlaceholder('Select a role…')
-        .setMinValues(1)
+        .setMinValues(0)
         .setMaxValues(1)
-        .setDisabled(roles.length === 0);
-
-        menu.addOptions({ label: 'Leave blank', value: '__clear__', description: 'Remove the configured role.' });
-
-        if (roles.length) {
-            menu.addOptions(roles.slice(0, 24).map(role => ({
-                label: truncateName(role.name, 100),
-                description: `ID: ${role.id}`.slice(0, 100),
-                value: role.id,
-                default: welcomeEntry.roles[target] === role.id
-            })));
-        } else {
-            menu.addOptions({ label: 'No available roles', value: 'noop', default: true });
-        }
+        .setDefaultRoles(currentRoleId ? [currentRoleId] : []);
 
         components.push(new ActionRowBuilder().addComponents(menu));
+
+        components.push(new ActionRowBuilder().addComponents(
+            new ButtonBuilder()
+            .setCustomId(`setup:welcome:clearRole:${target}`)
+            .setLabel('Clear selection')
+            .setStyle(ButtonStyle.Secondary)
+            .setDisabled(!currentRoleId)
+        ));
     }
 
     return { embeds: [embed], components };
