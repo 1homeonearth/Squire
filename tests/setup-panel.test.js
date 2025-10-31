@@ -111,8 +111,8 @@ it('buildWelcomeView surfaces role selections with role picker controls', async 
         config,
         client,
         guild,
-        mode: 'selectRole',
-        context: { target: 'unverifiedRoleId', availableGuildIds: ['123'] }
+        mode: 'roles',
+        context: { availableGuildIds: ['123'] }
     });
 
     const embed = view.embeds[0];
@@ -121,18 +121,20 @@ it('buildWelcomeView surfaces role selections with role picker controls', async 
     expect(roleField?.value).toContain('<@&999>');
 
     const roleRow = view.components.find((row) =>
-        row.components.some((component) => component.data?.custom_id === 'setup:welcome:applyRole:unverifiedRoleId')
+        row.components.some((component) => component.data?.custom_id === 'setup:welcome:roleChoice:unverifiedRoleId')
     );
     expect(roleRow).toBeTruthy();
-    const picker = roleRow.components.find((component) => component.data?.custom_id === 'setup:welcome:applyRole:unverifiedRoleId');
-    const pickerData = picker.data ?? picker.toJSON?.() ?? {};
-    expect(pickerData.type).toBe(ComponentType.RoleSelect);
-    const defaultId = pickerData.default_values?.[0]?.id ?? pickerData.default_values?.[0]?.value ?? null;
-    expect(defaultId).toBe('999');
+    const picker = roleRow.components.find((component) => component.data?.custom_id === 'setup:welcome:roleChoice:unverifiedRoleId');
+    const pickerData = picker.toJSON?.() ?? picker.data ?? {};
+    expect(pickerData.type).toBe(ComponentType.StringSelect);
+    const defaultOption = (pickerData.options ?? []).find((option) => option.value === '999');
+    expect(defaultOption?.default).toBe(true);
+    const clearOption = (pickerData.options ?? []).find((option) => option.value === '__clear__');
+    expect(clearOption?.default).toBe(false);
 
-    const clearRow = view.components.find((row) =>
-        row.components.some((component) => component.data?.custom_id === 'setup:welcome:clearRole:unverifiedRoleId')
+    const updateRow = view.components.find((row) =>
+        row.components.some((component) => component.data?.custom_id === 'setup:welcome:update')
     );
-    expect(clearRow).toBeTruthy();
+    expect(updateRow).toBeTruthy();
 });
 
