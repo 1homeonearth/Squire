@@ -1591,10 +1591,19 @@ async function buildWelcomeView({ config, client, guild, mode, context }) {
         : 'Select a server using the menu below.';
     const placeholderFieldValue = formatPlaceholderField();
 
-    const helpFieldValue = [
+    const helpLines = [
+        '• Click the buttons below to configure each setting. Dropdown selectors will appear whenever a choice is needed.',
         '• The welcome card image always renders **Welcome** and the member\'s username on the image itself.',
         '• Moderator pings (if configured) and the sentence `User is cross-verified.` appear in the plaintext before the image.'
-    ].join('\n');
+    ];
+
+    if (selectedGuild && mode === 'selectChannel') {
+        helpLines.unshift('• Choose the desired channel from the dropdown that just appeared, then the summary will refresh automatically.');
+    } else if (selectedGuild && mode === 'selectRole') {
+        helpLines.unshift('• Pick the appropriate role from the dropdown that just appeared. Clearing the selection will remove the configured role.');
+    }
+
+    const helpFieldValue = helpLines.join('\n');
 
     const embed = new EmbedBuilder()
     .setTitle('Welcome card setup')
@@ -1659,12 +1668,14 @@ async function buildWelcomeView({ config, client, guild, mode, context }) {
         new ButtonBuilder().setCustomId('setup:welcome:setVerify').setLabel('Set verify channel').setStyle(ButtonStyle.Secondary).setDisabled(!selectedGuild)
     ));
 
-    components.push(new ActionRowBuilder().addComponents(
+    const statusRow = new ActionRowBuilder().addComponents(
         new ButtonBuilder().setCustomId('setup:welcome:toggleEnabled').setLabel(welcomeEntry.enabled ? 'Disable module' : 'Enable module').setStyle(ButtonStyle.Secondary).setDisabled(!selectedGuild),
         new ButtonBuilder().setCustomId('setup:welcome:editMessage').setLabel('Edit pre-image text').setStyle(ButtonStyle.Primary).setDisabled(!selectedGuild),
         new ButtonBuilder().setCustomId('setup:welcome:resetMessage').setLabel('Reset to default').setStyle(ButtonStyle.Secondary).setDisabled(!selectedGuild),
-        new ButtonBuilder().setCustomId('setup:welcome:refresh').setLabel('Refresh').setStyle(ButtonStyle.Secondary)
-    ));
+        new ButtonBuilder().setCustomId('setup:welcome:refresh').setLabel('Refresh').setStyle(ButtonStyle.Secondary),
+        new ButtonBuilder().setCustomId('setup:navigate:home').setLabel('⬅ Back to overview').setStyle(ButtonStyle.Secondary)
+    );
+    components.push(statusRow);
 
     components.push(new ActionRowBuilder().addComponents(
         new ButtonBuilder().setCustomId('setup:welcome:setAutorole').setLabel('Set autorole').setStyle(ButtonStyle.Secondary).setDisabled(!selectedGuild),
@@ -1726,8 +1737,6 @@ async function buildWelcomeView({ config, client, guild, mode, context }) {
 
         components.push(new ActionRowBuilder().addComponents(menu));
     }
-
-    appendHomeButtonRow(components);
 
     return { embeds: [embed], components };
 }
