@@ -22,8 +22,21 @@ function resolveEnv(value, missing) {
     if (m) {
       const key = m[1];
       const v = process.env[key];
-      if (v === undefined) missing.add(key);
-      return v ?? '';
+      if (v === undefined) {
+        missing.add(key);
+        return '';
+      }
+
+      const trimmed = typeof v === 'string' ? v.trim() : '';
+      if ((trimmed.startsWith('{') && trimmed.endsWith('}')) || (trimmed.startsWith('[') && trimmed.endsWith(']'))) {
+        try {
+          return JSON.parse(trimmed);
+        } catch (error) {
+          console.warn(`[render-config] Failed to parse JSON from ${key}: ${error?.message ?? error}. Treating as string.`);
+        }
+      }
+
+      return v;
     }
     return value;
   }
