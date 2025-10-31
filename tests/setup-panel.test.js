@@ -1,6 +1,7 @@
 import { expect, it } from 'vitest';
+import { ComponentType } from 'discord.js';
 
-import { buildLoggingView } from '../src/features/setup/index.js';
+import { buildLoggingView, buildWelcomeView } from '../src/features/setup/index.js';
 
 it('buildLoggingView summarises mapping state and controls', async () => {
     const loggingGuildChannels = new Map([
@@ -67,5 +68,71 @@ it('buildLoggingView summarises mapping state and controls', async () => {
     const buttonsRow = view.components[1];
     expect(buttonsRow.components).toHaveLength(4);
     expect(buttonsRow.components[0].data.custom_id).toBe('setup:logging:linkCurrent');
+});
+
+it('buildWelcomeView surfaces role selections with role picker controls', async () => {
+    const rolesCache = new Map([
+        ['999', { id: '999', name: 'Unverified', position: 5 }]
+    ]);
+    const guild = {
+        id: '123',
+        name: 'Test Guild',
+        channels: { cache: new Map(), fetch: async () => new Map() },
+        roles: { cache: rolesCache, fetch: async () => rolesCache }
+    };
+
+    const guilds = {
+        cache: new Map([[guild.id, guild]]),
+        fetch: async (id) => guilds.cache.get(id)
+    };
+    const client = { guilds };
+
+    const config = {
+        mainServerIds: ['123'],
+        loggingServerId: null,
+        welcome: {
+            '123': {
+                channelId: '555',
+                mentions: {},
+                enabled: true,
+                preImageText: 'Welcome {{user}}!',
+                isCustomized: true,
+                roles: {
+                    unverifiedRoleId: '999',
+                    verifiedRoleId: null,
+                    crossVerifiedRoleId: null,
+                    moderatorRoleId: null
+                }
+            }
+        }
+    };
+
+    const view = await buildWelcomeView({
+        config,
+        client,
+        guild,
+        mode: 'selectRole',
+        context: { target: 'unverifiedRoleId', availableGuildIds: ['123'] }
+    });
+
+    const embed = view.embeds[0];
+    const embedData = embed.data ?? embed.toJSON?.() ?? {};
+    const roleField = embedData.fields.find((f) => f.name === 'Autorole (unverified)');
+    expect(roleField?.value).toContain('<@&999>');
+
+    const roleRow = view.components.find((row) =>
+        row.components.some((component) => component.data?.custom_id === 'setup:welcome:applyRole:unverifiedRoleId')
+    );
+    expect(roleRow).toBeTruthy();
+    const picker = roleRow.components.find((component) => component.data?.custom_id === 'setup:welcome:applyRole:unverifiedRoleId');
+    const pickerData = picker.data ?? picker.toJSON?.() ?? {};
+    expect(pickerData.type).toBe(ComponentType.RoleSelect);
+    const defaultId = pickerData.default_values?.[0]?.id ?? pickerData.default_values?.[0]?.value ?? null;
+    expect(defaultId).toBe('999');
+
+    const clearRow = view.components.find((row) =>
+        row.components.some((component) => component.data?.custom_id === 'setup:welcome:clearRole:unverifiedRoleId')
+    );
+    expect(clearRow).toBeTruthy();
 });
 
