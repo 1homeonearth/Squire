@@ -66,19 +66,23 @@ function fillRoundedRect(ctx, x, y, width, height, radius, fillStyle) {
 }
 
 function drawAvatar(ctx, img, x, y, size) {
+    const borderWidth = Math.max(6, Math.round(size * 0.08));
     const radius = size / 2;
+    const innerRadius = radius - borderWidth / 2;
+    const innerSize = innerRadius * 2;
+
     ctx.save();
     ctx.beginPath();
-    ctx.arc(x, y, radius, 0, Math.PI * 2);
+    ctx.arc(x, y, innerRadius, 0, Math.PI * 2);
     ctx.closePath();
     ctx.clip();
-    ctx.drawImage(img, x - radius, y - radius, size, size);
+    ctx.drawImage(img, x - innerRadius, y - innerRadius, innerSize, innerSize);
     ctx.restore();
 
-    ctx.lineWidth = 8;
+    ctx.lineWidth = borderWidth;
     ctx.strokeStyle = '#2563EB';
     ctx.beginPath();
-    ctx.arc(x, y, radius - 6, 0, Math.PI * 2);
+    ctx.arc(x, y, innerRadius, 0, Math.PI * 2);
     ctx.closePath();
     ctx.stroke();
 }
@@ -116,15 +120,9 @@ async function buildWelcomeImage(member, headerConfig, logger) {
     const ctx = canvas.getContext('2d');
 
     // Background layers
-    ctx.fillStyle = '#0F172A';
+    ctx.fillStyle = '#0B1220';
     ctx.fillRect(0, 0, width, height);
-    fillRoundedRect(ctx, 28, 32, width - 56, height - 64, 44, '#1B2637');
-
-    // Accent band across the top
-    ctx.save();
-    ctx.globalAlpha = 0.55;
-    fillRoundedRect(ctx, 28, 32, width - 56, 160, 44, '#223248');
-    ctx.restore();
+    fillRoundedRect(ctx, 28, 32, width - 56, height - 64, 44, '#152032');
 
     // Soft glow behind avatar
     const centerX = width / 2;
