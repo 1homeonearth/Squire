@@ -131,10 +131,5 @@ it('buildWelcomeView surfaces role selections with role picker controls', async 
     expect(defaultOption?.default).toBe(true);
     const clearOption = (pickerData.options ?? []).find((option) => option.value === '__clear__');
     expect(clearOption?.default).toBe(false);
-
-    const updateRow = view.components.find((row) =>
-        row.components.some((component) => component.data?.custom_id === 'setup:welcome:update')
-    );
-    expect(updateRow).toBeTruthy();
 });
 

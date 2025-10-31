@@ -1384,25 +1384,17 @@ async function handleWelcomeInteraction({ interaction, entry, config, client, ke
         }
 
         if (action === 'update') {
-            const storedGuildId = entry?.guildId ?? null;
-            const knownGuildId = currentGuildId ?? storedGuildId;
-            const availableForView = Array.isArray(entry?.availableGuildIds) && entry.availableGuildIds.length
-                ? entry.availableGuildIds
-                : availableGuildIds;
-            const guildForView = knownGuildId
-                ? await fetchGuild(client, knownGuildId).catch(() => null)
-                : null;
-            const nextMode = entry?.mode ?? (guildForView ? 'roles' : 'chooseGuild');
-            const effectiveGuild = nextMode === 'chooseGuild' ? null : guildForView;
+            const previousMode = entry?.mode ?? (currentGuildId ? 'roles' : 'chooseGuild');
+            const guildForView = previousMode === 'chooseGuild' ? null : targetGuild;
             const view = await buildWelcomeView({
                 config,
                 client,
-                guild: effectiveGuild,
-                mode: nextMode,
-                context: { availableGuildIds: availableForView }
+                guild: guildForView,
+                mode: previousMode,
+                context: { availableGuildIds }
             });
             const message = await interaction.update(view);
-            storePanelState(message, nextMode, entry?.context ?? {}, nextMode === 'chooseGuild' ? null : knownGuildId);
+            storePanelState(message, previousMode, {}, previousMode === 'chooseGuild' ? null : currentGuildId);
             await interaction.followUp({ content: 'View updated.', ephemeral: true }).catch(() => {});
             return;
         }
