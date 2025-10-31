@@ -233,4 +233,4 @@ The Node.js test runner covers high-risk logic such as the auto-bouncer’s mode
 
 ## License
 
-[MIT](./LICENSE)
+Licensed under the [GPL-3.0](./LICENSE).
