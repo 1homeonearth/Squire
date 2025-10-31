@@ -17,6 +17,7 @@ import { writeConfig } from '../../core/config.js';
 import { normalizeRainbowBridgeConfig, refresh as refreshRainbowBridge } from '../rainbow-bridge/index.js';
 import {
     DEFAULT_WELCOME_MESSAGE,
+    LEGACY_DEFAULT_WELCOME_MESSAGE,
     sanitizeWelcomeMessage,
     WELCOME_TEMPLATE_PLACEHOLDERS
 } from '../welcome-cards/template.js';
@@ -162,6 +163,7 @@ function ensureConfigShape(config) {
         config.autoban.notifyWebhookUrls = config.autoban.notifyWebhookUrls.map(String);
     }
     config.autoban.notifyChannelId = config.autoban.notifyChannelId ? String(config.autoban.notifyChannelId) : null;
+    config.autoban.scanBio = config.autoban.scanBio === false ? false : true;
 
     if (typeof config.sampleRate !== 'number' || Number.isNaN(config.sampleRate)) {
         config.sampleRate = 1;
@@ -222,8 +224,58 @@ function normalizeWelcomeEntry(entry) {
             mentions[key] = String(rawMentions[key]);
         }
     }
-    const message = sanitizeWelcomeMessage(obj.message);
-    return { channelId, mentions, message };
+
+    const rolesSource = obj.roles && typeof obj.roles === 'object' ? obj.roles : obj;
+    const roles = {
+        unverifiedRoleId: rolesSource.unverifiedRoleId ? String(rolesSource.unverifiedRoleId) : null,
+        verifiedRoleId: rolesSource.verifiedRoleId ? String(rolesSource.verifiedRoleId) : null,
+        crossVerifiedRoleId: rolesSource.crossVerifiedRoleId ? String(rolesSource.crossVerifiedRoleId) : null,
+        moderatorRoleId: rolesSource.moderatorRoleId ? String(rolesSource.moderatorRoleId) : null
+    };
+
+    const rawPreImage = typeof obj.preImageText === 'string'
+        ? obj.preImageText
+        : (typeof obj.message === 'string' ? obj.message : null);
+
+    let preImageText = sanitizeWelcomeMessage(rawPreImage ?? '');
+    let isCustomized;
+
+    if (typeof obj.isCustomized === 'boolean') {
+        isCustomized = obj.isCustomized;
+    } else if (!rawPreImage || !rawPreImage.trim()) {
+        preImageText = DEFAULT_WELCOME_MESSAGE;
+        isCustomized = false;
+    } else {
+        const normalizedRaw = rawPreImage.replace(/\r\n/g, '\n');
+        if (normalizedRaw === LEGACY_DEFAULT_WELCOME_MESSAGE) {
+            preImageText = DEFAULT_WELCOME_MESSAGE;
+            isCustomized = false;
+        } else if (preImageText === LEGACY_DEFAULT_WELCOME_MESSAGE) {
+            preImageText = DEFAULT_WELCOME_MESSAGE;
+            isCustomized = false;
+        } else if (preImageText === DEFAULT_WELCOME_MESSAGE) {
+            isCustomized = false;
+        } else {
+            isCustomized = true;
+        }
+    }
+
+    if (preImageText === LEGACY_DEFAULT_WELCOME_MESSAGE) {
+        preImageText = DEFAULT_WELCOME_MESSAGE;
+    }
+
+    const enabled = obj.enabled === false ? false : true;
+
+    return {
+        channelId,
+        mentions,
+        preImageText,
+        isCustomized: Boolean(isCustomized),
+        enabled,
+        headerLine1: 'Welcome',
+        headerLine2Template: '{username}',
+        roles
+    };
 }
 
 function coerceRecord(value) {
@@ -1167,6 +1219,15 @@ function formatChannel(guild, channelId) {
     return `<#${channelId}>`;
 }
 
+function formatRole(guild, roleId) {
+    if (!roleId) return 'Not configured';
+    const role = guild?.roles?.cache?.get?.(roleId);
+    if (role) {
+        return `<@&${role.id}>`;
+    }
+    return `<@&${roleId}>`;
+}
+
 function formatCategory(guild, categoryId) {
     if (!categoryId) return 'Not configured';
     const channel = guild?.channels?.cache?.get?.(categoryId);
@@ -1202,6 +1263,19 @@ async function collectCategories(guild) {
     }
 }
 
+async function collectRoles(guild) {
+    if (!guild) return [];
+    try {
+        const collection = await guild.roles.fetch();
+        return collection
+        .filter(role => role && role.id !== guild.id)
+        .map(role => role)
+        .sort((a, b) => (b.position ?? 0) - (a.position ?? 0));
+    } catch {
+        return [];
+    }
+}
+
 function appendHomeButtonRow(components) {
     components.push(new ActionRowBuilder().addComponents(
         new ButtonBuilder()
@@ -1221,47 +1295,110 @@ async function handleWelcomeInteraction({ interaction, entry, config, client, ke
     const ensureWelcomeEntry = () => {
         if (!currentGuildId) return null;
         if (!config.welcome[currentGuildId]) {
-            config.welcome[currentGuildId] = { channelId: null, mentions: {}, message: DEFAULT_WELCOME_MESSAGE };
+            config.welcome[currentGuildId] = {
+                channelId: null,
+                mentions: {},
+                preImageText: DEFAULT_WELCOME_MESSAGE,
+                isCustomized: false,
+                enabled: true,
+                headerLine1: 'Welcome',
+                headerLine2Template: '{username}',
+                roles: {
+                    unverifiedRoleId: null,
+                    verifiedRoleId: null,
+                    crossVerifiedRoleId: null,
+                    moderatorRoleId: null
+                }
+            };
         }
         const entryCfg = config.welcome[currentGuildId];
         if (!entryCfg.mentions || typeof entryCfg.mentions !== 'object') {
             entryCfg.mentions = {};
         }
-        entryCfg.message = sanitizeWelcomeMessage(entryCfg.message);
+        if (!entryCfg.roles || typeof entryCfg.roles !== 'object') {
+            entryCfg.roles = {
+                unverifiedRoleId: null,
+                verifiedRoleId: null,
+                crossVerifiedRoleId: null,
+                moderatorRoleId: null
+            };
+        }
+        entryCfg.preImageText = sanitizeWelcomeMessage(entryCfg.preImageText ?? '');
+        if (entryCfg.preImageText === LEGACY_DEFAULT_WELCOME_MESSAGE) {
+            entryCfg.preImageText = DEFAULT_WELCOME_MESSAGE;
+        }
+        if (typeof entryCfg.isCustomized !== 'boolean') {
+            entryCfg.isCustomized = entryCfg.preImageText !== DEFAULT_WELCOME_MESSAGE;
+        }
+        if (!entryCfg.headerLine1) entryCfg.headerLine1 = 'Welcome';
+        if (!entryCfg.headerLine2Template) entryCfg.headerLine2Template = '{username}';
         return entryCfg;
     };
 
+    const storePanelState = (message, mode, context) => {
+        panelStore.set(key, {
+            message,
+            guildId: currentGuildId,
+            mode,
+            context: context ?? {},
+            availableGuildIds
+        });
+    };
+
     if (interaction.isButton()) {
-        const target = interaction.customId.split(':')[2];
+        const action = interaction.customId.split(':')[2];
         if (!currentGuildId) {
             await interaction.reply({ content: 'Select a server to configure first.', ephemeral: true });
             return;
         }
-        switch (target) {
-            case 'setWelcome': {
-                const view = await buildWelcomeView({ config, client, guild: targetGuild, mode: 'select', context: { target: 'welcome', availableGuildIds } });
-                const message = await interaction.update(view);
-                panelStore.set(key, { message, guildId: currentGuildId, mode: 'select', context: { target: 'welcome' }, availableGuildIds });
+
+        const channelActions = {
+            setWelcome: 'welcome',
+            setRules: 'rules',
+            setRoles: 'roles',
+            setVerify: 'verify'
+        };
+        const roleActions = {
+            setAutorole: 'unverifiedRoleId',
+            setVerifiedRole: 'verifiedRoleId',
+            setCrossRole: 'crossVerifiedRoleId',
+            setModeratorRole: 'moderatorRoleId'
+        };
+
+        if (channelActions[action]) {
+            const target = channelActions[action];
+            const view = await buildWelcomeView({
+                config,
+                client,
+                guild: targetGuild,
+                mode: 'selectChannel',
+                context: { target, availableGuildIds }
+            });
+            const message = await interaction.update(view);
+            storePanelState(message, 'selectChannel', { target });
+            return;
+        }
+
+        if (roleActions[action]) {
+            const entryCfg = ensureWelcomeEntry();
+            if (!entryCfg) {
+                await interaction.reply({ content: 'Select a server to configure first.', ephemeral: true });
                 return;
             }
-            case 'setRules': {
-                const view = await buildWelcomeView({ config, client, guild: targetGuild, mode: 'select', context: { target: 'rules', availableGuildIds } });
-                const message = await interaction.update(view);
-                panelStore.set(key, { message, guildId: currentGuildId, mode: 'select', context: { target: 'rules' }, availableGuildIds });
-                return;
-            }
-            case 'setRoles': {
-                const view = await buildWelcomeView({ config, client, guild: targetGuild, mode: 'select', context: { target: 'roles', availableGuildIds } });
-                const message = await interaction.update(view);
-                panelStore.set(key, { message, guildId: currentGuildId, mode: 'select', context: { target: 'roles' }, availableGuildIds });
-                return;
-            }
-            case 'setVerify': {
-                const view = await buildWelcomeView({ config, client, guild: targetGuild, mode: 'select', context: { target: 'verify', availableGuildIds } });
-                const message = await interaction.update(view);
-                panelStore.set(key, { message, guildId: currentGuildId, mode: 'select', context: { target: 'verify' }, availableGuildIds });
-                return;
-            }
+            const target = roleActions[action];
+            const view = await buildWelcomeView({
+                config,
+                client,
+                guild: targetGuild,
+                mode: 'selectRole',
+                context: { target, availableGuildIds }
+            });
+            const message = await interaction.update(view);
+            storePanelState(message, 'selectRole', { target });
+            return;
+        }
+
+        switch (action) {
             case 'editMessage': {
                 const entryCfg = ensureWelcomeEntry();
                 if (!entryCfg) {
@@ -1277,31 +1414,77 @@ async function handleWelcomeInteraction({ interaction, entry, config, client, ke
                         .setCustomId('setup:welcome:messageInput')
                         .setLabel('Message template')
                         .setStyle(TextInputStyle.Paragraph)
-                        .setRequired(true)
+                        .setRequired(false)
                         .setPlaceholder('Use {{user}}, {{guild}}, {{rules}}, etc.')
                         .setMaxLength(2000)
-                        .setValue(sanitizeWelcomeMessage(entryCfg.message))
+                        .setValue(entryCfg.preImageText ?? DEFAULT_WELCOME_MESSAGE)
                     )
                 );
-                panelStore.set(key, {
-                    message: entry?.message ?? null,
-                    guildId: currentGuildId,
-                    mode: entry?.mode ?? 'default',
-                    context: entry?.context ?? {},
-                    availableGuildIds
-                });
+                storePanelState(entry?.message ?? null, entry?.mode ?? 'default', entry?.context ?? {});
                 await interaction.showModal(modal);
+                return;
+            }
+            case 'toggleEnabled': {
+                const entryCfg = ensureWelcomeEntry();
+                entryCfg.enabled = entryCfg.enabled === false;
+                saveConfig(config, logger);
+                const view = await buildWelcomeView({ config, client, guild: targetGuild, mode: 'default', context: { availableGuildIds } });
+                const message = await interaction.update(view);
+                storePanelState(message, 'default', {});
+                await interaction.followUp({ content: `Welcome cards are now ${entryCfg.enabled ? 'enabled' : 'disabled'}.`, ephemeral: true }).catch(() => {});
+                return;
+            }
+            case 'resetMessage': {
+                const entryCfg = ensureWelcomeEntry();
+                entryCfg.preImageText = DEFAULT_WELCOME_MESSAGE;
+                entryCfg.isCustomized = false;
+                saveConfig(config, logger);
+                const view = await buildWelcomeView({ config, client, guild: targetGuild, mode: 'default', context: { availableGuildIds } });
+                const message = await interaction.update(view);
+                storePanelState(message, 'default', {});
+                await interaction.followUp({ content: 'Welcome message reset to default.', ephemeral: true }).catch(() => {});
                 return;
             }
             case 'refresh': {
                 const view = await buildWelcomeView({ config, client, guild: targetGuild, mode: 'default', context: { availableGuildIds } });
                 const message = await interaction.update(view);
-                panelStore.set(key, { message, guildId: currentGuildId, mode: 'default', context: {}, availableGuildIds });
+                storePanelState(message, 'default', {});
                 return;
             }
             default:
                 return;
         }
+    }
+
+    if (interaction.isModalSubmit()) {
+        if (interaction.customId === 'setup:welcome:messageModal') {
+            const entryCfg = ensureWelcomeEntry();
+            if (!entryCfg) {
+                await interaction.reply({ content: 'Select a server to configure first.', ephemeral: true });
+                return;
+            }
+            const raw = interaction.fields.getTextInputValue('setup:welcome:messageInput') ?? '';
+            if (!raw.trim()) {
+                entryCfg.preImageText = DEFAULT_WELCOME_MESSAGE;
+                entryCfg.isCustomized = false;
+            } else {
+                const sanitized = sanitizeWelcomeMessage(raw);
+                entryCfg.preImageText = sanitized;
+                entryCfg.isCustomized = sanitized !== DEFAULT_WELCOME_MESSAGE;
+            }
+            saveConfig(config, logger);
+            await interaction.reply({ content: 'Welcome message updated.', ephemeral: true });
+            const entryState = panelStore.get(key);
+            if (entryState?.message) {
+                try {
+                    const guild = entryState.guildId ? await fetchGuild(client, entryState.guildId) : targetGuild;
+                    const view = await buildWelcomeView({ config, client, guild, mode: 'default', context: { availableGuildIds } });
+                    const message = await entryState.message.edit(view);
+                    storePanelState(message, 'default', {});
+                } catch {}
+            }
+        }
+        return;
     }
 
     if (interaction.isStringSelectMenu()) {
@@ -1321,70 +1504,54 @@ async function handleWelcomeInteraction({ interaction, entry, config, client, ke
             if (!currentGuildId) {
                 const view = await buildWelcomeView({ config, client, guild: null, mode: 'default', context: { availableGuildIds } });
                 const message = await interaction.update(view);
-                panelStore.set(key, { message, guildId: null, mode: 'default', context: {}, availableGuildIds });
+                storePanelState(message, 'default', {});
                 return;
             }
             const target = parts[3];
-            const choice = interaction.values?.[0] ?? null;
             const entryCfg = ensureWelcomeEntry();
             if (!entryCfg) {
-                const view = await buildWelcomeView({ config, client, guild: targetGuild, mode: 'default', context: { availableGuildIds } });
-                const message = await interaction.update(view);
-                panelStore.set(key, { message, guildId: currentGuildId, mode: 'default', context: {}, availableGuildIds });
+                await interaction.reply({ content: 'Select a server to configure first.', ephemeral: true });
                 return;
             }
-
+            const choice = interaction.values?.[0] ?? null;
             if (target === 'welcome') {
-                entryCfg.channelId = choice === '__clear__' ? null : choice;
+                entryCfg.channelId = choice && choice !== '__clear__' && choice !== 'noop' ? choice : null;
             } else if (['rules', 'roles', 'verify'].includes(target)) {
-                if (choice === '__clear__') {
-                    delete entryCfg.mentions[target];
-                } else if (choice) {
-                    entryCfg.mentions[target] = choice;
-                }
+                entryCfg.mentions[target] = choice && choice !== '__clear__' && choice !== 'noop' ? choice : null;
             }
             saveConfig(config, logger);
             const view = await buildWelcomeView({ config, client, guild: targetGuild, mode: 'default', context: { availableGuildIds } });
             const message = await interaction.update(view);
-            panelStore.set(key, { message, guildId: currentGuildId, mode: 'default', context: {}, availableGuildIds });
-            await interaction.followUp({ content: 'Welcome configuration updated.', ephemeral: true }).catch(() => {});
+            storePanelState(message, 'default', {});
+            await interaction.followUp({ content: 'Configuration updated.', ephemeral: true }).catch(() => {});
             return;
         }
-    }
 
-    if (interaction.isModalSubmit()) {
-        if (interaction.customId === 'setup:welcome:messageModal') {
+        if (action === 'applyRole') {
             if (!currentGuildId) {
+                const view = await buildWelcomeView({ config, client, guild: null, mode: 'default', context: { availableGuildIds } });
+                const message = await interaction.update(view);
+                storePanelState(message, 'default', {});
+                return;
+            }
+            const target = parts[3];
+            const entryCfg = ensureWelcomeEntry();
+            if (!entryCfg) {
                 await interaction.reply({ content: 'Select a server to configure first.', ephemeral: true });
                 return;
             }
-            const entryCfg = ensureWelcomeEntry();
-            if (!entryCfg) {
-                await interaction.reply({ content: 'That server is no longer available.', ephemeral: true });
-                return;
-            }
-            const raw = interaction.fields.getTextInputValue('setup:welcome:messageInput') ?? '';
-            const sanitized = sanitizeWelcomeMessage(raw);
-            entryCfg.message = sanitized;
-            if (!saveConfig(config, logger)) {
-                await interaction.reply({ content: 'Failed to save welcome message changes.', ephemeral: true });
-                return;
-            }
-            const notice = sanitized === DEFAULT_WELCOME_MESSAGE
-                ? 'Welcome message reset to default.'
-                : 'Welcome message updated.';
-            await interaction.reply({ content: notice, ephemeral: true });
-            if (entry?.message) {
-                try {
-                    const refreshedGuild = currentGuildId ? await fetchGuild(client, currentGuildId) : null;
-                    const view = await buildWelcomeView({ config, client, guild: refreshedGuild, mode: 'default', context: { availableGuildIds } });
-                    const message = await entry.message.edit(view);
-                    panelStore.set(key, { message, guildId: currentGuildId, mode: 'default', context: { availableGuildIds }, availableGuildIds });
-                } catch {
-                    panelStore.set(key, { message: entry?.message ?? null, guildId: currentGuildId, mode: 'default', context: { availableGuildIds }, availableGuildIds });
-                }
+            const choice = interaction.values?.[0] ?? null;
+            const nextRoleId = choice && choice !== '__clear__' && choice !== 'noop' ? choice : null;
+            if (['unverifiedRoleId', 'verifiedRoleId', 'crossVerifiedRoleId', 'moderatorRoleId'].includes(target)) {
+                entryCfg.roles[target] = nextRoleId;
+                saveConfig(config, logger);
+                const view = await buildWelcomeView({ config, client, guild: targetGuild, mode: 'default', context: { availableGuildIds } });
+                const message = await interaction.update(view);
+                storePanelState(message, 'default', {});
+                const text = nextRoleId ? 'Role updated.' : 'Role cleared.';
+                await interaction.followUp({ content: text, ephemeral: true }).catch(() => {});
             } else {
-                panelStore.set(key, { message: null, guildId: currentGuildId, mode: 'default', context: { availableGuildIds }, availableGuildIds });
+                await interaction.reply({ content: 'Unsupported role selector.', ephemeral: true });
             }
             return;
         }
@@ -1396,28 +1563,56 @@ async function buildWelcomeView({ config, client, guild, mode, context }) {
     const selectedGuild = guild ?? null;
     const selectedGuildId = selectedGuild?.id ?? null;
     const sourceEntry = selectedGuildId ? config.welcome?.[selectedGuildId] : null;
+
     const welcomeEntry = {
         channelId: sourceEntry?.channelId ?? null,
         mentions: sourceEntry?.mentions && typeof sourceEntry.mentions === 'object' ? { ...sourceEntry.mentions } : {},
-        message: sanitizeWelcomeMessage(sourceEntry?.message)
+        preImageText: sanitizeWelcomeMessage(sourceEntry?.preImageText ?? sourceEntry?.message ?? DEFAULT_WELCOME_MESSAGE),
+        isCustomized: typeof sourceEntry?.isCustomized === 'boolean'
+            ? sourceEntry.isCustomized
+            : sanitizeWelcomeMessage(sourceEntry?.preImageText ?? sourceEntry?.message ?? DEFAULT_WELCOME_MESSAGE) !== DEFAULT_WELCOME_MESSAGE,
+        enabled: sourceEntry?.enabled === false ? false : true,
+        roles: {
+            unverifiedRoleId: sourceEntry?.roles?.unverifiedRoleId ?? null,
+            verifiedRoleId: sourceEntry?.roles?.verifiedRoleId ?? null,
+            crossVerifiedRoleId: sourceEntry?.roles?.crossVerifiedRoleId ?? null,
+            moderatorRoleId: sourceEntry?.roles?.moderatorRoleId ?? null
+        }
     };
+
+    if (welcomeEntry.preImageText === LEGACY_DEFAULT_WELCOME_MESSAGE) {
+        welcomeEntry.preImageText = DEFAULT_WELCOME_MESSAGE;
+        welcomeEntry.isCustomized = false;
+    }
+
     const mentionMap = welcomeEntry.mentions || {};
     const messageFieldValue = selectedGuild
-        ? formatWelcomeMessageField(welcomeEntry.message)
+        ? formatWelcomeMessageField(welcomeEntry.preImageText, welcomeEntry.isCustomized)
         : 'Select a server using the menu below.';
     const placeholderFieldValue = formatPlaceholderField();
 
+    const helpFieldValue = [
+        '• The welcome card image always renders **Welcome** and the member\'s username on the image itself.',
+        '• Moderator pings (if configured) and the sentence `User is cross-verified.` appear in the plaintext before the image.'
+    ].join('\n');
+
     const embed = new EmbedBuilder()
     .setTitle('Welcome card setup')
-    .setDescription('Choose which channels power the welcome experience for each main server.')
+    .setDescription('Configure welcome messaging, autoroles, and cross-verification handling.')
     .addFields(
         { name: 'Selected server', value: selectedGuild ? `${selectedGuild.name} (${selectedGuild.id})` : 'Select a server using the menu below.', inline: false },
-        { name: 'Welcome channel', value: selectedGuild ? formatChannel(selectedGuild, welcomeEntry.channelId) : 'Not configured', inline: false },
+        { name: 'Module status', value: welcomeEntry.enabled ? '✅ Enabled' : '🚫 Disabled', inline: true },
+        { name: 'Welcome channel', value: selectedGuild ? formatChannel(selectedGuild, welcomeEntry.channelId) : 'Not configured', inline: true },
         { name: 'Rules mention', value: selectedGuild ? mentionToDisplay(selectedGuild, mentionMap.rules) : 'Not configured', inline: true },
         { name: 'Roles mention', value: selectedGuild ? mentionToDisplay(selectedGuild, mentionMap.roles) : 'Not configured', inline: true },
         { name: 'Verify mention', value: selectedGuild ? mentionToDisplay(selectedGuild, mentionMap.verify) : 'Not configured', inline: true },
-        { name: 'Welcome message', value: messageFieldValue, inline: false },
-        { name: 'Available placeholders', value: placeholderFieldValue, inline: false }
+        { name: 'Autorole (unverified)', value: selectedGuild ? formatRole(selectedGuild, welcomeEntry.roles.unverifiedRoleId) : 'Not configured', inline: true },
+        { name: 'Verified role (reference)', value: selectedGuild ? formatRole(selectedGuild, welcomeEntry.roles.verifiedRoleId) : 'Not configured', inline: true },
+        { name: 'Cross-verified role', value: selectedGuild ? formatRole(selectedGuild, welcomeEntry.roles.crossVerifiedRoleId) : 'Not configured', inline: true },
+        { name: 'Moderator ping role', value: selectedGuild ? formatRole(selectedGuild, welcomeEntry.roles.moderatorRoleId) : 'Not configured', inline: true },
+        { name: 'Pre-image text', value: messageFieldValue, inline: false },
+        { name: 'Available placeholders', value: placeholderFieldValue, inline: false },
+        { name: 'Help', value: helpFieldValue, inline: false }
     );
 
     const components = [];
@@ -1457,21 +1652,28 @@ async function buildWelcomeView({ config, client, guild, mode, context }) {
 
     components.push(new ActionRowBuilder().addComponents(guildMenu));
 
-    const channelButtons = new ActionRowBuilder().addComponents(
+    components.push(new ActionRowBuilder().addComponents(
         new ButtonBuilder().setCustomId('setup:welcome:setWelcome').setLabel('Set welcome channel').setStyle(ButtonStyle.Primary).setDisabled(!selectedGuild),
         new ButtonBuilder().setCustomId('setup:welcome:setRules').setLabel('Set rules channel').setStyle(ButtonStyle.Secondary).setDisabled(!selectedGuild),
         new ButtonBuilder().setCustomId('setup:welcome:setRoles').setLabel('Set roles channel').setStyle(ButtonStyle.Secondary).setDisabled(!selectedGuild),
         new ButtonBuilder().setCustomId('setup:welcome:setVerify').setLabel('Set verify channel').setStyle(ButtonStyle.Secondary).setDisabled(!selectedGuild)
-    );
+    ));
 
-    const messageButtons = new ActionRowBuilder().addComponents(
-        new ButtonBuilder().setCustomId('setup:welcome:editMessage').setLabel('Edit welcome message').setStyle(ButtonStyle.Secondary).setDisabled(!selectedGuild),
+    components.push(new ActionRowBuilder().addComponents(
+        new ButtonBuilder().setCustomId('setup:welcome:toggleEnabled').setLabel(welcomeEntry.enabled ? 'Disable module' : 'Enable module').setStyle(ButtonStyle.Secondary).setDisabled(!selectedGuild),
+        new ButtonBuilder().setCustomId('setup:welcome:editMessage').setLabel('Edit pre-image text').setStyle(ButtonStyle.Primary).setDisabled(!selectedGuild),
+        new ButtonBuilder().setCustomId('setup:welcome:resetMessage').setLabel('Reset to default').setStyle(ButtonStyle.Secondary).setDisabled(!selectedGuild),
         new ButtonBuilder().setCustomId('setup:welcome:refresh').setLabel('Refresh').setStyle(ButtonStyle.Secondary)
-    );
+    ));
 
-    components.push(channelButtons, messageButtons);
+    components.push(new ActionRowBuilder().addComponents(
+        new ButtonBuilder().setCustomId('setup:welcome:setAutorole').setLabel('Set autorole').setStyle(ButtonStyle.Secondary).setDisabled(!selectedGuild),
+        new ButtonBuilder().setCustomId('setup:welcome:setVerifiedRole').setLabel('Set verified role').setStyle(ButtonStyle.Secondary).setDisabled(!selectedGuild),
+        new ButtonBuilder().setCustomId('setup:welcome:setCrossRole').setLabel('Set cross-verified role').setStyle(ButtonStyle.Secondary).setDisabled(!selectedGuild),
+        new ButtonBuilder().setCustomId('setup:welcome:setModeratorRole').setLabel('Set moderator ping').setStyle(ButtonStyle.Secondary).setDisabled(!selectedGuild)
+    ));
 
-    if (mode === 'select' && selectedGuild) {
+    if (mode === 'selectChannel' && selectedGuild) {
         const target = context?.target;
         const channels = await collectTextChannels(selectedGuild);
         const menu = new StringSelectMenuBuilder()
@@ -1492,6 +1694,34 @@ async function buildWelcomeView({ config, client, guild, mode, context }) {
                     ? welcomeEntry.channelId === ch.id
                     : mentionMap[target] === ch.id
             })));
+        } else {
+            menu.addOptions({ label: 'No available channels', value: 'noop', default: true });
+        }
+
+        components.push(new ActionRowBuilder().addComponents(menu));
+    }
+
+    if (mode === 'selectRole' && selectedGuild) {
+        const target = context?.target;
+        const roles = await collectRoles(selectedGuild);
+        const menu = new StringSelectMenuBuilder()
+        .setCustomId(`setup:welcome:applyRole:${target}`)
+        .setPlaceholder('Select a role…')
+        .setMinValues(1)
+        .setMaxValues(1)
+        .setDisabled(roles.length === 0);
+
+        menu.addOptions({ label: 'Leave blank', value: '__clear__', description: 'Remove the configured role.' });
+
+        if (roles.length) {
+            menu.addOptions(roles.slice(0, 24).map(role => ({
+                label: truncateName(role.name, 100),
+                description: `ID: ${role.id}`.slice(0, 100),
+                value: role.id,
+                default: welcomeEntry.roles[target] === role.id
+            })));
+        } else {
+            menu.addOptions({ label: 'No available roles', value: 'noop', default: true });
         }
 
         components.push(new ActionRowBuilder().addComponents(menu));
@@ -1507,22 +1737,24 @@ function mentionToDisplay(guild, channelId) {
     return formatChannel(guild, channelId);
 }
 
-function formatWelcomeMessageField(template) {
-    const sanitized = sanitizeWelcomeMessage(template);
-    const trimmed = sanitized.trim();
-    const isDefault = sanitized === DEFAULT_WELCOME_MESSAGE;
-    if (!trimmed) {
+function formatWelcomeMessageField(template, isCustomized) {
+    const sanitized = sanitizeWelcomeMessage(template ?? '');
+    const previewSource = sanitized.replace(/\s+$/u, '');
+    if (!previewSource) {
         return 'Using default message.';
     }
-    const lines = trimmed.split('\n');
+    const lines = previewSource.split('\n');
     let preview = lines.slice(0, 4).join('\n');
     if (preview.length > 180) {
         preview = `${preview.slice(0, 177)}…`;
     }
     const block = `\`\`\`\n${preview || ' '}\n\`\`\``;
-    return isDefault
-        ? `${block}\nUsing default message.`
-        : `${block}\nCustom message active.`;
+    const customized = typeof isCustomized === 'boolean'
+        ? isCustomized
+        : sanitized !== DEFAULT_WELCOME_MESSAGE;
+    return customized
+        ? `${block}\nCustom message active.`
+        : `${block}\nUsing default message.`;
 }
 
 function formatPlaceholderField() {
@@ -2086,6 +2318,15 @@ async function handleAutobouncerInteraction({ interaction, entry, config, key, l
                 await interaction.followUp({ content: `Autobouncer is now ${config.autoban.enabled === false ? 'disabled' : 'enabled'}.`, ephemeral: true }).catch(() => {});
                 return;
             }
+            case 'toggleBio': {
+                config.autoban.scanBio = config.autoban.scanBio === false;
+                saveConfig(config, logger);
+                const view = await buildAutobouncerView({ config, client });
+                const message = await interaction.update(view);
+                panelStore.set(key, { message, guildId: entry?.guildId ?? null, mode: 'default', context: {} });
+                await interaction.followUp({ content: `Autobouncer bio scanning is now ${config.autoban.scanBio === false ? 'disabled' : 'enabled'}.`, ephemeral: true }).catch(() => {});
+                return;
+            }
             case 'editKeywords': {
                 const keywords = Array.isArray(config.autoban.blockedUsernames) ? config.autoban.blockedUsernames.join('\n') : '';
                 const modal = new ModalBuilder()
@@ -2164,11 +2405,13 @@ async function buildAutobouncerView({ config, client }) {
     .addFields(
         { name: 'Status', value: autobanCfg.enabled === false ? '🚫 Disabled' : '✅ Enabled', inline: true },
         { name: 'Logging channel', value: loggingGuild ? formatChannel(loggingGuild, notifyChannelId) : (notifyChannelId ? `<#${notifyChannelId}>` : 'Not configured'), inline: true },
+        { name: 'Bio scanning', value: autobanCfg.scanBio === false ? '🚫 Disabled' : '✅ Enabled', inline: true },
         { name: 'Keywords', value: keywords.length ? keywords.map(k => `• ${k}`).slice(0, 10).join('\n') + (keywords.length > 10 ? `\n… ${keywords.length - 10} more` : '') : 'No keywords configured.', inline: false }
     );
 
     const buttons = new ActionRowBuilder().addComponents(
         new ButtonBuilder().setCustomId('setup:autobouncer:toggle').setLabel(autobanCfg.enabled === false ? 'Enable' : 'Disable').setStyle(ButtonStyle.Secondary),
+        new ButtonBuilder().setCustomId('setup:autobouncer:toggleBio').setLabel(autobanCfg.scanBio === false ? 'Enable bio scan' : 'Disable bio scan').setStyle(ButtonStyle.Secondary),
         new ButtonBuilder().setCustomId('setup:autobouncer:editKeywords').setLabel('Edit keywords').setStyle(ButtonStyle.Primary),
         new ButtonBuilder().setCustomId('setup:autobouncer:refresh').setLabel('Refresh').setStyle(ButtonStyle.Secondary)
     );

@@ -1,6 +1,6 @@
 // src/features/welcome-cards/index.js
 import { createCanvas, loadImage as loadCanvasImage } from '@napi-rs/canvas';
-import { AttachmentBuilder } from 'discord.js';
+import { AttachmentBuilder, PermissionFlagsBits } from 'discord.js';
 import { loadImage, Font } from 'canvacord';
 
 import {
@@ -95,7 +95,7 @@ function fitFont(ctx, weight, family, text, maxWidth, startSize, minSize) {
     return Math.max(size, minSize);
 }
 
-async function buildWelcomeImage(member, logger) {
+async function buildWelcomeImage(member, headerConfig, logger) {
     // Ensure we have the freshest user data (banners often require an explicit fetch)
     try { await member.user.fetch(true); } catch {}
 
@@ -140,21 +140,25 @@ async function buildWelcomeImage(member, logger) {
 
     drawAvatar(ctx, avatarImg, centerX, avatarCenterY, avatarSize);
 
-    const displayName = member.displayName || member.user.username;
+    const headerLine1 = String(headerConfig?.line1 ?? 'Welcome');
+    const usernameText = member.user?.username
+        ?? member.displayName
+        ?? member.user?.tag
+        ?? member.id;
+    const headerLine2 = String(headerConfig?.line2 ?? usernameText);
 
     ctx.textAlign = 'center';
     ctx.textBaseline = 'middle';
 
-    const titleFont = fitFont(ctx, '700', 'Manrope, "Inter", sans-serif', 'WELCOME', width - 240, 64, 44);
+    const titleFont = fitFont(ctx, '700', 'Manrope, "Inter", sans-serif', headerLine1, width - 240, 64, 44);
     ctx.font = `700 ${titleFont}px "Manrope", "Inter", sans-serif`;
     ctx.fillStyle = '#FFFFFF';
-    ctx.fillText('WELCOME', centerX, avatarCenterY + avatarSize / 2 + 52);
+    ctx.fillText(headerLine1, centerX, avatarCenterY + avatarSize / 2 + 52);
 
-    const welcomeText = `Welcome, ${displayName}!`;
-    const welcomeFont = fitFont(ctx, '600', 'Manrope, "Inter", sans-serif', welcomeText, width - 260, 40, 28);
+    const welcomeFont = fitFont(ctx, '600', 'Manrope, "Inter", sans-serif', headerLine2, width - 260, 40, 28);
     ctx.font = `600 ${welcomeFont}px "Manrope", "Inter", sans-serif`;
     ctx.fillStyle = '#E5E7EB';
-    ctx.fillText(welcomeText, centerX, avatarCenterY + avatarSize / 2 + 120);
+    ctx.fillText(headerLine2, centerX, avatarCenterY + avatarSize / 2 + 120);
 
     const png = await canvas.encode('png');
     const buffer = Buffer.isBuffer(png) ? png : Buffer.from(png);
@@ -166,36 +170,172 @@ export function init({ client, logger, config }) {
         config.welcome = {};
     }
 
+    let currentConfig = config;
+    let crossIndex = buildCrossVerificationIndex(currentConfig);
+    const autobannedMembers = new Map(); // key -> timeout handle
+
+    const rememberAutoban = (guildId, userId) => {
+        if (!guildId || !userId) return;
+        const key = `${guildId}:${userId}`;
+        const existing = autobannedMembers.get(key);
+        if (existing) clearTimeout(existing);
+        const timeout = setTimeout(() => {
+            autobannedMembers.delete(key);
+        }, 5 * 60 * 1000);
+        autobannedMembers.set(key, timeout);
+    };
+
+    const clearAutoban = (guildId, userId) => {
+        if (!guildId || !userId) return;
+        const key = `${guildId}:${userId}`;
+        const handle = autobannedMembers.get(key);
+        if (handle) {
+            clearTimeout(handle);
+            autobannedMembers.delete(key);
+        }
+    };
+
+    const wasAutobanned = (guildId, userId) => {
+        const key = `${guildId}:${userId}`;
+        const handle = autobannedMembers.get(key);
+        if (!handle) return false;
+        clearTimeout(handle);
+        autobannedMembers.delete(key);
+        return true;
+    };
+
+    client.on('squire:configUpdated', (nextConfig) => {
+        if (!nextConfig) return;
+        currentConfig = nextConfig;
+        crossIndex = buildCrossVerificationIndex(currentConfig);
+    });
+
+    const markAutoban = (payload) => {
+        const guildId = payload?.guildId;
+        const userId = payload?.userId;
+        rememberAutoban(guildId, userId);
+    };
+
+    client.on('squire:autoban:pending', markAutoban);
+
+    client.on('squire:autoban:banned', (payload) => {
+        const guildId = payload?.guildId;
+        const userId = payload?.userId;
+        rememberAutoban(guildId, userId);
+    });
+
+    client.on('squire:autoban:failed', (payload) => {
+        const guildId = payload?.guildId;
+        const userId = payload?.userId;
+        clearAutoban(guildId, userId);
+    });
+
     client.on('guildMemberAdd', async (member) => {
         try {
             if (!member.guild) return;
-            const welcomeCfg = config?.welcome?.[member.guild.id] || {};
-            const mentionMap = welcomeCfg.mentions || {};
-            const ch = await findWelcomeChannel(member.guild, welcomeCfg.channelId);
-            if (!ch) return;
 
-            // Plain helper line above the image
-            const rules  = mentionFromConfig(member.guild, 'rules', mentionMap);
-            const roles  = mentionFromConfig(member.guild, 'roles', mentionMap);
-            const verify = mentionFromConfig(member.guild, 'verify', mentionMap);
-            const messageTemplate = sanitizeWelcomeMessage(welcomeCfg.message);
-            const rendered = renderWelcomeTemplate(messageTemplate, {
+            if (wasAutobanned(member.guild.id, member.id)) {
+                logger?.debug?.(`[welcome] Skipping welcome flow for ${member.id} in ${member.guild.id} due to autoban.`);
+                return;
+            }
+
+            const guildEntry = currentConfig?.welcome?.[member.guild.id];
+            if (!guildEntry || guildEntry.enabled === false) {
+                return;
+            }
+
+            const channel = await findWelcomeChannel(member.guild, guildEntry.channelId);
+            if (!channel) {
+                logger?.warn?.(`[welcome] No accessible welcome channel for ${member.guild.name ?? member.guild.id}.`);
+                return;
+            }
+
+            const mentionMap = guildEntry.mentions && typeof guildEntry.mentions === 'object'
+                ? guildEntry.mentions
+                : {};
+
+            const preImageText = guildEntry.isCustomized === false
+                ? DEFAULT_WELCOME_MESSAGE
+                : sanitizeWelcomeMessage(guildEntry.preImageText ?? guildEntry.message ?? DEFAULT_WELCOME_MESSAGE);
+
+            const rendered = renderWelcomeTemplate(preImageText, {
                 user: `<@${member.id}>`,
                 username: member.user?.username ?? member.user?.tag ?? member.id,
                 usertag: member.user?.tag ?? member.user?.username ?? member.id,
                 displayname: member.displayName ?? member.user?.globalName ?? member.user?.username ?? member.id,
                 guild: member.guild.name ?? 'this server',
-                rules,
-                roles,
-                verify,
+                rules: mentionFromConfig(member.guild, 'rules', mentionMap),
+                roles: mentionFromConfig(member.guild, 'roles', mentionMap),
+                verify: mentionFromConfig(member.guild, 'verify', mentionMap),
                 membercount: String(member.guild.memberCount ?? member.guild.approximateMemberCount ?? '')
             });
-            await ch.send(rendered);
 
-            const image = await buildWelcomeImage(member, logger);
-            if (image) {
-                await ch.send({ files: [image] });
+            const crossResult = await determineCrossVerification({
+                client,
+                member,
+                currentGuildId: member.guild.id,
+                index: crossIndex
+            });
+
+            const rolesConfig = guildEntry.roles || {};
+            const moderatorRoleId = rolesConfig.moderatorRoleId ?? null;
+            const crossVerifiedRoleId = rolesConfig.crossVerifiedRoleId ?? null;
+            const unverifiedRoleId = rolesConfig.unverifiedRoleId ?? null;
+
+            const roleMentions = [];
+            const contentParts = [];
+
+            if (crossResult.isCrossVerified) {
+                if (moderatorRoleId) {
+                    const moderatorRole = await resolveRole(member.guild, moderatorRoleId);
+                    if (moderatorRole) {
+                        if (canMentionRole(channel, moderatorRole)) {
+                            roleMentions.push(moderatorRoleId);
+                            contentParts.push(`<@&${moderatorRoleId}> User is cross-verified.`);
+                        } else {
+                            logger?.warn?.(`[welcome] Cannot mention moderator role ${moderatorRoleId} in ${member.guild.id}; missing permissions or role not mentionable.`);
+                        }
+                    } else {
+                        logger?.warn?.(`[welcome] Configured moderator role ${moderatorRoleId} missing in ${member.guild.id}.`);
+                    }
+                }
+
+                if (crossVerifiedRoleId) {
+                    const success = await assignRoleWithRetry(member, crossVerifiedRoleId, logger, { label: 'cross-verified role' });
+                    if (!success) {
+                        logger?.warn?.(`[welcome] Failed to assign cross-verified role ${crossVerifiedRoleId} to ${member.id} in ${member.guild.id}.`);
+                    }
+                } else {
+                    logger?.warn?.(`[welcome] ${member.id} is cross-verified but no cross-verified role configured in ${member.guild.id}.`);
+                }
+            } else if (unverifiedRoleId) {
+                const success = await assignRoleWithRetry(member, unverifiedRoleId, logger, { label: 'unverified role' });
+                if (!success) {
+                    logger?.warn?.(`[welcome] Failed to assign unverified role ${unverifiedRoleId} to ${member.id} in ${member.guild.id}.`);
+                }
+            } else {
+                logger?.warn?.(`[welcome] No unverified autorole configured for ${member.guild.id}.`);
             }
+
+            contentParts.push(rendered);
+            const content = contentParts.join('\n');
+
+            const headerLine2 = buildHeaderLine2(guildEntry, member);
+            const headerConfig = {
+                line1: guildEntry.headerLine1 || 'Welcome',
+                line2: headerLine2
+            };
+            const image = await buildWelcomeImage(member, headerConfig, logger);
+
+            const payload = {
+                content: content || ' ',
+                allowedMentions: roleMentions.length ? { roles: roleMentions } : { parse: [] }
+            };
+            if (image) {
+                payload.files = [image];
+            }
+
+            await channel.send(payload);
         } catch (e) {
             const name = member.guild?.name ?? member.guild?.id ?? 'unknown guild';
             const msg = e?.message || e;
@@ -206,7 +346,7 @@ export function init({ client, logger, config }) {
     client.on('guildMemberRemove', async (member) => {
         try {
             if (!member.guild) return;
-            const welcomeCfg = config?.welcome?.[member.guild.id] || {};
+            const welcomeCfg = currentConfig?.welcome?.[member.guild.id] || {};
             const ch = await findWelcomeChannel(member.guild, welcomeCfg.channelId);
             if (!ch) return;
             const name = member.displayName || member.user?.username || 'A member';
@@ -217,4 +357,88 @@ export function init({ client, logger, config }) {
             logger?.error?.(`[welcome] failed to send goodbye in ${guildName}: ${msg}`);
         }
     });
+}
+
+function buildCrossVerificationIndex(config) {
+    const welcomeConfig = config?.welcome && typeof config.welcome === 'object' ? config.welcome : {};
+    const allowedGuilds = new Set((config?.mainServerIds ?? []).map(String));
+    const entries = [];
+    for (const [guildId, entry] of Object.entries(welcomeConfig)) {
+        if (!guildId) continue;
+        if (allowedGuilds.size && !allowedGuilds.has(guildId)) continue;
+        const verifiedRoleId = entry?.roles?.verifiedRoleId ?? null;
+        if (verifiedRoleId) {
+            entries.push({ guildId, verifiedRoleId });
+        }
+    }
+    return entries;
+}
+
+async function determineCrossVerification({ client, member, currentGuildId, index }) {
+    if (!Array.isArray(index) || index.length === 0) {
+        return { isCrossVerified: false, guilds: [] };
+    }
+
+    const matches = [];
+    for (const entry of index) {
+        if (!entry?.guildId || entry.guildId === currentGuildId || !entry.verifiedRoleId) continue;
+        const guild = client.guilds.cache.get(entry.guildId) ?? await client.guilds.fetch(entry.guildId).catch(() => null);
+        if (!guild) continue;
+        let otherMember = guild.members.cache.get(member.id);
+        if (!otherMember) {
+            try {
+                otherMember = await guild.members.fetch({ user: member.id, force: false });
+            } catch {}
+        }
+        if (!otherMember) continue;
+        if (otherMember.roles?.cache?.has(entry.verifiedRoleId)) {
+            matches.push({ guildId: entry.guildId, guildName: guild.name ?? entry.guildId });
+        }
+    }
+
+    return { isCrossVerified: matches.length > 0, guilds: matches };
+}
+
+async function assignRoleWithRetry(member, roleId, logger, { label = 'role', attempts = 3, delayMs = 500 } = {}) {
+    if (!roleId || !member?.roles?.add) return false;
+    for (let attempt = 1; attempt <= attempts; attempt += 1) {
+        try {
+            await member.roles.add(roleId);
+            return true;
+        } catch (err) {
+            const lastAttempt = attempt === attempts;
+            logger?.warn?.(`[welcome] Failed to assign ${label} ${roleId} to ${member.id} (attempt ${attempt}/${attempts}): ${err?.message ?? err}`);
+            if (lastAttempt) {
+                return false;
+            }
+            await new Promise(resolve => setTimeout(resolve, delayMs * attempt));
+        }
+    }
+    return false;
+}
+
+async function resolveRole(guild, roleId) {
+    if (!guild || !roleId) return null;
+    const cached = guild.roles.cache.get(roleId);
+    if (cached) return cached;
+    try {
+        return await guild.roles.fetch(roleId);
+    } catch {
+        return null;
+    }
+}
+
+function canMentionRole(channel, role) {
+    if (!channel || !role) return false;
+    if (role.mentionable) return true;
+    const me = channel.guild?.members?.me ?? null;
+    if (!me) return false;
+    const perms = typeof channel.permissionsFor === 'function' ? channel.permissionsFor(me) : null;
+    return perms?.has?.(PermissionFlagsBits.MentionEveryone) ?? false;
+}
+
+function buildHeaderLine2(entry, member) {
+    const template = typeof entry?.headerLine2Template === 'string' ? entry.headerLine2Template : '{username}';
+    const username = member.user?.username ?? member.displayName ?? member.user?.tag ?? member.id;
+    return template.replace('{username}', username);
 }
