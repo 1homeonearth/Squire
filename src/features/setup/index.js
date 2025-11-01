@@ -634,7 +634,7 @@ async function handleHomeInteraction({ interaction, config, client, logger, home
         }
 
         if (target === 'autobouncer') {
-            const view = await buildAutobouncerView({ config, client });
+            const view = await buildAutobouncerView({ config, client, mode: 'default', context: {} });
             const message = await interaction.update(view);
             panelStore.set(moduleKey, { message, guildId: null, mode: 'default', context: {} });
             panelStore.set(homeKey, { message, guildOptions, view: 'module', module: 'autobouncer' });
@@ -2455,7 +2455,7 @@ async function handleAutobouncerInteraction({ interaction, entry, config, key, l
             case 'toggle': {
                 config.autoban.enabled = config.autoban.enabled === false;
                 saveConfig(config, logger);
-                const view = await buildAutobouncerView({ config, client });
+                const view = await buildAutobouncerView({ config, client, mode: 'default', context: {} });
                 const message = await interaction.update(view);
                 panelStore.set(key, { message, guildId: entry?.guildId ?? null, mode: 'default', context: {} });
                 await interaction.followUp({ content: `Autobouncer is now ${config.autoban.enabled === false ? 'disabled' : 'enabled'}.`, ephemeral: true }).catch(() => {});
@@ -2464,7 +2464,7 @@ async function handleAutobouncerInteraction({ interaction, entry, config, key, l
             case 'toggleBio': {
                 config.autoban.scanBio = config.autoban.scanBio === false;
                 saveConfig(config, logger);
-                const view = await buildAutobouncerView({ config, client });
+                const view = await buildAutobouncerView({ config, client, mode: 'default', context: {} });
                 const message = await interaction.update(view);
                 panelStore.set(key, { message, guildId: entry?.guildId ?? null, mode: 'default', context: {} });
                 await interaction.followUp({ content: `Autobouncer bio scanning is now ${config.autoban.scanBio === false ? 'disabled' : 'enabled'}.`, ephemeral: true }).catch(() => {});
@@ -2489,9 +2489,48 @@ async function handleAutobouncerInteraction({ interaction, entry, config, key, l
                 return;
             }
             case 'refresh': {
-                const view = await buildAutobouncerView({ config, client });
+                const currentMode = entry?.mode ?? 'default';
+                const currentContext = entry?.context ?? {};
+                const view = await buildAutobouncerView({ config, client, mode: currentMode, context: currentContext });
+                const message = await interaction.update(view);
+                panelStore.set(key, { message, guildId: entry?.guildId ?? null, mode: currentMode, context: currentContext });
+                return;
+            }
+            case 'backToOverview': {
+                const view = await buildAutobouncerView({ config, client, mode: 'default', context: {} });
                 const message = await interaction.update(view);
                 panelStore.set(key, { message, guildId: entry?.guildId ?? null, mode: 'default', context: {} });
+                return;
+            }
+            case 'refreshGuild': {
+                const guildId = interaction.customId.split(':')[3] ?? null;
+                if (!guildId || guildId === 'unknown') {
+                    await interaction.reply({ content: 'The selected server could not be reloaded. Return to the overview and pick it again.', ephemeral: true }).catch(() => {});
+                    return;
+                }
+                const view = await buildAutobouncerView({ config, client, mode: 'test-role', context: { guildId } });
+                const message = await interaction.update(view);
+                panelStore.set(key, { message, guildId: entry?.guildId ?? null, mode: 'test-role', context: { guildId } });
+                await interaction.followUp({ content: 'Reloaded the server roles.', ephemeral: true }).catch(() => {});
+                return;
+            }
+            case 'clearTestRole': {
+                const guildId = interaction.customId.split(':')[3] ?? null;
+                if (!guildId || guildId === 'unknown') {
+                    await interaction.reply({ content: 'That server selection expired. Return to the overview and choose it again.', ephemeral: true }).catch(() => {});
+                    return;
+                }
+                if (!config.autoban.testRoleMap || typeof config.autoban.testRoleMap !== 'object') {
+                    config.autoban.testRoleMap = {};
+                }
+                delete config.autoban.testRoleMap[guildId];
+                saveConfig(config, logger);
+                const view = await buildAutobouncerView({ config, client, mode: 'test-role', context: { guildId } });
+                const message = await interaction.update(view);
+                panelStore.set(key, { message, guildId: entry?.guildId ?? null, mode: 'test-role', context: { guildId } });
+                const guild = await fetchGuild(client, guildId).catch(() => null);
+                const guildName = guild?.name ?? guildId;
+                await interaction.followUp({ content: `Cleared the test role override for **${guildName}**.`, ephemeral: true }).catch(() => {});
                 return;
             }
             default:
@@ -2509,41 +2548,19 @@ async function handleAutobouncerInteraction({ interaction, entry, config, key, l
             const entryState = panelStore.get(key);
             if (entryState?.message) {
                 try {
-                    const view = await buildAutobouncerView({ config, client });
+                    const view = await buildAutobouncerView({
+                        config,
+                        client,
+                        mode: entryState.mode ?? 'default',
+                        context: entryState.context ?? {}
+                    });
                     const message = await entryState.message.edit(view);
-                    panelStore.set(key, { message, guildId: entryState.guildId ?? null, mode: 'default', context: {} });
-                } catch {}
-            }
-        } else if (interaction.customId.startsWith('setup:autobouncer:testRoleModal:')) {
-            const parts = interaction.customId.split(':');
-            const guildId = parts[parts.length - 1] ?? null;
-            if (!guildId) {
-                await interaction.reply({ content: 'Guild selection expired. Please try again.', ephemeral: true }).catch(() => {});
-                return;
-            }
-            const raw = interaction.fields.getTextInputValue('setup:autobouncer:testRoleInput') ?? '';
-            const roleId = raw.trim();
-            if (!config.autoban.testRoleMap || typeof config.autoban.testRoleMap !== 'object') {
-                config.autoban.testRoleMap = {};
-            }
-            if (roleId) {
-                config.autoban.testRoleMap[guildId] = roleId;
-            } else {
-                delete config.autoban.testRoleMap[guildId];
-            }
-            saveConfig(config, logger);
-            const guild = await fetchGuild(client, guildId).catch(() => null);
-            const guildName = guild?.name ?? guildId;
-            const reply = roleId
-                ? `Set test role override for **${guildName}** to <@&${roleId}>.`
-                : `Cleared test role override for **${guildName}**.`;
-            await interaction.reply({ content: reply, ephemeral: true }).catch(() => {});
-            const entryState = panelStore.get(key);
-            if (entryState?.message) {
-                try {
-                    const view = await buildAutobouncerView({ config, client });
-                    const message = await entryState.message.edit(view);
-                    panelStore.set(key, { message, guildId: entryState.guildId ?? null, mode: 'default', context: {} });
+                    panelStore.set(key, {
+                        message,
+                        guildId: entryState.guildId ?? null,
+                        mode: entryState.mode ?? 'default',
+                        context: entryState.context ?? {}
+                    });
                 } catch {}
             }
         }
@@ -2558,7 +2575,7 @@ async function handleAutobouncerInteraction({ interaction, entry, config, key, l
                 config.autoban.notifyChannelId = choice;
             }
             saveConfig(config, logger);
-            const view = await buildAutobouncerView({ config, client });
+            const view = await buildAutobouncerView({ config, client, mode: 'default', context: {} });
             const message = await interaction.update(view);
             panelStore.set(key, { message, guildId: entry?.guildId ?? null, mode: 'default', context: {} });
             await interaction.followUp({ content: choice === '__clear__' ? 'Autobouncer notifications disabled.' : 'Autobouncer notifications channel updated.', ephemeral: true }).catch(() => {});
@@ -2568,36 +2585,155 @@ async function handleAutobouncerInteraction({ interaction, entry, config, key, l
                 await interaction.reply({ content: 'Select a server to update the test role override.', ephemeral: true }).catch(() => {});
                 return;
             }
-            const map = config.autoban.testRoleMap && typeof config.autoban.testRoleMap === 'object'
-                ? config.autoban.testRoleMap
-                : {};
-            const existingRoleId = typeof map[guildId] === 'string' ? map[guildId] : '';
-            const modal = new ModalBuilder()
-            .setCustomId(`setup:autobouncer:testRoleModal:${guildId}`)
-            .setTitle('Set test role override')
-            .addComponents(
-                new ActionRowBuilder().addComponents(
-                    new TextInputBuilder()
-                    .setCustomId('setup:autobouncer:testRoleInput')
-                    .setLabel('Role ID (leave blank to clear)')
-                    .setStyle(TextInputStyle.Short)
-                    .setRequired(false)
-                    .setValue(existingRoleId ?? '')
-                )
-            );
-            await interaction.showModal(modal);
+            const view = await buildAutobouncerView({ config, client, mode: 'test-role', context: { guildId } });
+            const message = await interaction.update(view);
+            panelStore.set(key, { message, guildId: entry?.guildId ?? null, mode: 'test-role', context: { guildId } });
+            return;
+        } else if (parts[2] === 'chooseTestRole') {
+            const guildId = parts[3] ?? null;
+            const choice = interaction.values?.[0] ?? null;
+            if (!guildId || guildId === 'unknown') {
+                await interaction.reply({ content: 'That selection expired. Return to the overview and choose the server again.', ephemeral: true }).catch(() => {});
+                return;
+            }
+            if (!config.autoban.testRoleMap || typeof config.autoban.testRoleMap !== 'object') {
+                config.autoban.testRoleMap = {};
+            }
+            const guild = await fetchGuild(client, guildId).catch(() => null);
+            const guildName = guild?.name ?? guildId;
+            let content;
+            if (!choice || choice === 'noop') {
+                await interaction.reply({ content: 'Pick a role or choose **Clear test role override**.', ephemeral: true }).catch(() => {});
+                return;
+            }
+            if (choice === '__clear__') {
+                delete config.autoban.testRoleMap[guildId];
+                content = `Cleared the test role override for **${guildName}**.`;
+            } else {
+                config.autoban.testRoleMap[guildId] = choice;
+                content = `Set the test role override for **${guildName}** to <@&${choice}>.`;
+            }
+            saveConfig(config, logger);
+            const view = await buildAutobouncerView({ config, client, mode: 'test-role', context: { guildId } });
+            const message = await interaction.update(view);
+            panelStore.set(key, { message, guildId: entry?.guildId ?? null, mode: 'test-role', context: { guildId } });
+            await interaction.followUp({ content, ephemeral: true }).catch(() => {});
+                return;
         }
     }
 }
 
-async function buildAutobouncerView({ config, client }) {
+async function buildAutobouncerView({ config, client, mode = 'default', context = {} }) {
     const autobanCfg = config.autoban || {};
     const keywords = Array.isArray(autobanCfg.blockedUsernames) ? autobanCfg.blockedUsernames : [];
+    const testRoleMap = autobanCfg.testRoleMap && typeof autobanCfg.testRoleMap === 'object' ? autobanCfg.testRoleMap : {};
+
+    if (mode === 'test-role') {
+        const guildId = context?.guildId ?? null;
+        const guild = guildId ? await fetchGuild(client, guildId).catch(() => null) : null;
+        const roles = guild ? await collectRoleOptions(guild) : [];
+        const currentRoleId = guildId && typeof testRoleMap[guildId] === 'string' ? testRoleMap[guildId] : null;
+
+        const embed = new EmbedBuilder()
+        .setTitle('Autobouncer test role override')
+        .setDescription('Pick which role the autobouncer should treat as “already passed” when running its simulated sweeps for this server.')
+        .addFields(
+            {
+                name: 'Server',
+                value: guild
+                    ? `**${truncateName(guild.name, 70)}**\n\`${guild.id}\``
+                    : guildId
+                        ? `Server unavailable\n\`${guildId}\``
+                        : 'Server selection expired.',
+                inline: false
+            },
+            {
+                name: 'Current override',
+                value: currentRoleId ? formatRole(guild, currentRoleId) : 'No test role override configured.',
+                inline: false
+            }
+        );
+
+        const components = [];
+        const navRow = new ActionRowBuilder().addComponents(
+            new ButtonBuilder()
+            .setCustomId('setup:autobouncer:backToOverview')
+            .setLabel('⬅ Back to autobouncer')
+            .setStyle(ButtonStyle.Secondary)
+        );
+
+        if (guildId) {
+            navRow.addComponents(
+                new ButtonBuilder()
+                .setCustomId(`setup:autobouncer:refreshGuild:${guildId}`)
+                .setLabel('Refresh roles')
+                .setStyle(ButtonStyle.Secondary)
+                .setDisabled(!guild)
+            );
+            if (currentRoleId) {
+                navRow.addComponents(
+                    new ButtonBuilder()
+                    .setCustomId(`setup:autobouncer:clearTestRole:${guildId}`)
+                    .setLabel('Clear test role')
+                    .setStyle(ButtonStyle.Secondary)
+                );
+            }
+        }
+
+        components.push(navRow);
+
+        const roleMenu = new StringSelectMenuBuilder()
+        .setCustomId(`setup:autobouncer:chooseTestRole:${guildId ?? 'unknown'}`)
+        .setPlaceholder(guild ? 'Select a role or clear the override…' : 'Server unavailable')
+        .setMinValues(1)
+        .setMaxValues(1)
+        .setDisabled(!guildId);
+
+        const roleOptions = [
+            {
+                label: currentRoleId ? 'Clear test role override' : 'Leave override empty',
+                value: '__clear__',
+                description: 'Fall back to the autorole and welcome defaults.',
+                default: !currentRoleId
+            }
+        ];
+
+        if (roles.length) {
+            for (const role of roles) {
+                if (roleOptions.length >= 25) break;
+                roleOptions.push({
+                    label: truncateName(role.name, 100),
+                    description: `ID: ${role.id}`.slice(0, 100),
+                    value: role.id,
+                    default: role.id === currentRoleId
+                });
+            }
+        } else if (guild) {
+            roleOptions.push({
+                label: 'No additional roles available',
+                value: 'noop',
+                description: 'Roles may be managed or hidden from me.',
+                default: false
+            });
+        } else {
+            roleOptions.push({
+                label: 'Unable to load roles',
+                value: 'noop',
+                description: 'Re-open this server after re-inviting Squire.',
+                default: false
+            });
+        }
+
+        roleMenu.addOptions(roleOptions.slice(0, 25));
+        components.push(new ActionRowBuilder().addComponents(roleMenu));
+        appendHomeButtonRow(components);
+        return { embeds: [embed], components };
+    }
+
     const loggingGuildId = config.loggingServerId ?? null;
     const loggingGuild = loggingGuildId ? await fetchGuild(client, loggingGuildId) : null;
     const channels = loggingGuild ? await collectTextChannels(loggingGuild) : [];
     const notifyChannelId = autobanCfg.notifyChannelId ?? null;
-    const testRoleMap = autobanCfg.testRoleMap && typeof autobanCfg.testRoleMap === 'object' ? autobanCfg.testRoleMap : {};
 
     const embed = new EmbedBuilder()
     .setTitle('Autobouncer setup')
@@ -2689,7 +2825,7 @@ async function buildAutobouncerView({ config, client }) {
 
     const testRoleMenu = new StringSelectMenuBuilder()
     .setCustomId('setup:autobouncer:pickTestRoleGuild')
-    .setPlaceholder(guildInfo.length ? 'Select a server to set test role…' : 'No servers available')
+    .setPlaceholder(guildInfo.length ? 'Select a server to configure test role…' : 'No servers available')
     .setMinValues(1)
     .setMaxValues(1)
     .setDisabled(guildInfo.length === 0);
