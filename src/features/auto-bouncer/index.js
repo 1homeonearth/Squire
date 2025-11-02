@@ -296,7 +296,11 @@ export function init({ client, logger, config, db }) {
             const welcomeChannel = await resolveWelcomeChannelFromConfig(member.guild, activeConfig);
             await safePlainChannelNotify(welcomeChannel, 'Autobouncer banned a user from even trying to get in.', logger);
 
-            client.emit('squire:autoban:banned', { guildId: member.guild?.id, userId: member.id });
+            client.emit('squire:autoban:banned', {
+                guildId: member.guild?.id,
+                userId: member.id,
+                welcomeChannelId: welcomeChannel?.id ?? null
+            });
         } catch (err) {
             logger?.error?.(`[autoban] Failed while processing new member ${member.id}: ${err?.message ?? err}`);
             moderationEvents?.insert({
