@@ -1992,13 +1992,46 @@ async function handleRainbowBridgeInteraction({ interaction, entry, config, key,
                     await interaction.reply({ content: 'That bridge no longer exists.', ephemeral: true });
                     return;
                 }
-                if (!guildOptions.length) {
-                    const modal = buildRainbowBridgeAddChannelModal({ bridgeId });
-                    setStateOnly('manage', { bridgeId, action: 'add', stage: 'manual-entry' });
-                    await interaction.showModal(modal);
-                    return;
+                const modalContext = { bridgeId, action: 'add' };
+                if (entry?.message) {
+                    try {
+                        const view = await buildRainbowBridgeView({ config, client, guildOptions, mode: 'manage', context: modalContext });
+                        const message = await entry.message.edit(view);
+                        panelStore.set(key, { message, guildOptions, mode: 'manage', context: modalContext });
+                    } catch {}
+                } else {
+                    panelStore.set(key, { message: entry?.message ?? null, guildOptions, mode: 'manage', context: modalContext });
                 }
-                await updateView('manage', { bridgeId, action: 'add', stage: 'pick-guild' });
+                const modal = new ModalBuilder()
+                .setCustomId(`setup:rainbow:addChannelModal:${bridgeId}`)
+                .setTitle('Add channel to bridge')
+                .addComponents(
+                    new ActionRowBuilder().addComponents(
+                        new TextInputBuilder()
+                        .setCustomId('setup:rainbow:addChannelGuildId')
+                        .setLabel('Guild ID')
+                        .setPlaceholder('123456789012345678')
+                        .setStyle(TextInputStyle.Short)
+                        .setRequired(true)
+                    ),
+                    new ActionRowBuilder().addComponents(
+                        new TextInputBuilder()
+                        .setCustomId('setup:rainbow:addChannelId')
+                        .setLabel('Channel ID')
+                        .setPlaceholder('123456789012345678')
+                        .setStyle(TextInputStyle.Short)
+                        .setRequired(true)
+                    ),
+                    new ActionRowBuilder().addComponents(
+                        new TextInputBuilder()
+                        .setCustomId('setup:rainbow:addChannelWebhook')
+                        .setLabel('Existing webhook URL (optional)')
+                        .setPlaceholder('https://discord.com/api/webhooks/...')
+                        .setStyle(TextInputStyle.Short)
+                        .setRequired(false)
+                    )
+                );
+                await interaction.showModal(modal);
                 return;
             }
             case 'removeChannel': {
@@ -2099,38 +2132,6 @@ async function handleRainbowBridgeInteraction({ interaction, entry, config, key,
     }
 
     if (interaction.isStringSelectMenu()) {
-        const parts = interaction.customId.split(':');
-        const action = parts[2];
-
-        if (action === 'pickGuild') {
-            const bridgeId = parts[3] || null;
-            if (!bridgeId || !bridges[bridgeId]) {
-                await interaction.reply({ content: 'That bridge no longer exists.', ephemeral: true });
-                return;
-            }
-            const choice = interaction.values?.[0] ?? null;
-            if (!choice || choice === 'noop') {
-                await interaction.reply({ content: 'Select a server to continue adding a channel.', ephemeral: true });
-                return;
-            }
-            const sanitizedGuildId = sanitizeSnowflakeId(choice);
-            if (!sanitizedGuildId) {
-                await interaction.reply({ content: 'That server selection is invalid.', ephemeral: true });
-                return;
-            }
-
-            panelStore.set(key, {
-                message: entry?.message ?? null,
-                guildOptions,
-                mode: 'manage',
-                context: { bridgeId, action: 'add', stage: 'pick-guild', selectedGuildId: sanitizedGuildId }
-            });
-
-            const modal = buildRainbowBridgeAddChannelModal({ bridgeId, guildId: sanitizedGuildId });
-            await interaction.showModal(modal);
-            return;
-        }
-
         await interaction.reply({
             content: 'Rainbow Bridge management now uses text entry forms. Use the buttons below to open the appropriate form.',
             ephemeral: true
@@ -2345,7 +2346,6 @@ async function handleRainbowBridgeInteraction({ interaction, entry, config, key,
 }
 
 async function buildRainbowBridgeView({ config, client, guildOptions: _guildOptions, mode, context }) {
-    const guildOptionList = Array.isArray(_guildOptions) ? _guildOptions : [];
     const embed = new EmbedBuilder()
     .setTitle('🌈 Rainbow Bridge setup')
     .setDescription('Synchronize messages, edits, and deletions across channels in different servers.');
@@ -2431,11 +2431,7 @@ async function buildRainbowBridgeView({ config, client, guildOptions: _guildOpti
         }
 
         if (context?.action === 'add') {
-            if (context?.stage === 'pick-guild') {
-                embed.setFooter({ text: 'Select the server that hosts the channel you want to add.' });
-            } else {
-                embed.setFooter({ text: 'Use “Add channel” to paste the guild ID, channel ID, and optional webhook URL.' });
-            }
+            embed.setFooter({ text: 'Use “Add channel” to paste the guild ID, channel ID, and optional webhook URL.' });
         } else if (context?.action === 'remove') {
             embed.setFooter({ text: 'Use “Remove channel” to paste the channel IDs you want to unlink from this bridge.' });
         } else if (context?.action === 'confirm-delete') {
@@ -2459,28 +2455,6 @@ async function buildRainbowBridgeView({ config, client, guildOptions: _guildOpti
                 new ButtonBuilder().setCustomId(`setup:rainbow:confirmDelete:${bridgeId}`).setLabel('Yes, delete bridge').setStyle(ButtonStyle.Danger),
                 new ButtonBuilder().setCustomId(`setup:rainbow:cancelDelete:${bridgeId}`).setLabel('Cancel').setStyle(ButtonStyle.Secondary)
             ));
-        }
-
-        if (context?.action === 'add' && context?.stage === 'pick-guild') {
-            const menu = new StringSelectMenuBuilder()
-            .setCustomId(`setup:rainbow:pickGuild:${bridgeId}`)
-            .setPlaceholder(guildOptionList.length ? 'Select a server…' : 'No accessible servers')
-            .setMinValues(1)
-            .setMaxValues(1)
-            .setDisabled(!guildOptionList.length);
-
-            if (guildOptionList.length) {
-                menu.addOptions(guildOptionList.slice(0, 25).map((opt) => ({
-                    label: truncateName((opt.name ?? opt.id) || opt.id, 100),
-                    description: `ID: ${opt.id}`.slice(0, 100),
-                    value: opt.id,
-                    default: context?.selectedGuildId === opt.id
-                })));
-            } else {
-                menu.addOptions({ label: 'No available servers', value: 'noop', default: true });
-            }
-
-            components.push(new ActionRowBuilder().addComponents(menu));
         }
 
         appendHomeButtonRow(components);
