@@ -20,7 +20,7 @@ import {
     truncateName
 } from '../setup/shared.js';
 
-const LOGGING_CHANNEL_CATEGORIES = [
+export const LOGGING_CHANNEL_CATEGORIES = [
     { key: 'messages', label: 'Message logs', description: 'Cross-server message forwards.' },
     { key: 'moderation', label: 'Moderation alerts', description: 'Bans, kicks, warnings and escalations.' },
     { key: 'joins', label: 'Join & leave', description: 'Member join/leave notifications.' },

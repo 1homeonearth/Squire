@@ -4,15 +4,38 @@ import {
     PermissionFlagsBits,
     EmbedBuilder,
     ActionRowBuilder,
-    StringSelectMenuBuilder
+    StringSelectMenuBuilder,
+    ButtonBuilder,
+    ButtonStyle,
+    ModalBuilder,
+    TextInputBuilder,
+    TextInputStyle
 } from 'discord.js';
 
 import { writeConfig } from '../../core/config.js';
-import { createLoggingSetup } from '../logging-forwarder/setup.js';
+import { createLoggingSetup, LOGGING_CHANNEL_CATEGORIES } from '../logging-forwarder/setup.js';
 import { createWelcomeSetup } from '../welcome-cards/setup.js';
+import {
+    DEFAULT_WELCOME_MESSAGE,
+    LEGACY_DEFAULT_WELCOME_MESSAGE,
+    WELCOME_TEMPLATE_PLACEHOLDERS,
+    sanitizeWelcomeMessage
+} from '../welcome-cards/template.js';
 import { createRainbowBridgeSetup } from '../rainbow-bridge/setup.js';
+import { normalizeRainbowBridgeConfig, refresh as refreshRainbowBridge } from '../rainbow-bridge/index.js';
 import { createAutobouncerSetup } from '../auto-bouncer/setup.js';
-import { appendHomeButtonRow, formatChannel, truncateName } from './shared.js';
+import {
+    appendHomeButtonRow,
+    collectCategories,
+    collectTextChannels,
+    formatCategory,
+    formatChannel,
+    formatRole,
+    isValidWebhookUrl,
+    sanitizeBridgeId,
+    sanitizeSnowflakeId,
+    truncateName
+} from './shared.js';
 
 const panelStore = new Map(); // `${userId}:${module}` -> { message, guildId, mode, context }
 let activeClient = null;
@@ -1026,93 +1049,6 @@ function truncateWebhook(url) {
     } catch {
         return url.length > 60 ? `${url.slice(0, 57)}…` : url;
     }
-}
-
-function truncateName(name, max) {
-    const value = String(name ?? 'Unknown');
-    return value.length > max ? `${value.slice(0, max - 1)}…` : value;
-}
-
-function sanitizeBridgeId(value) {
-    if (!value) return null;
-    const cleaned = String(value).trim().toLowerCase().replace(/\s+/g, '-');
-    const safe = cleaned.replace(/[^a-z0-9_-]/g, '-').replace(/-+/g, '-').replace(/^[-_]+|[-_]+$/g, '');
-    if (!safe) return null;
-    return safe.slice(0, 48);
-}
-
-function sanitizeSnowflakeId(value) {
-    if (value === undefined || value === null) return null;
-    const trimmed = String(value).trim();
-    return /^\d{15,25}$/.test(trimmed) ? trimmed : null;
-}
-
-function isValidWebhookUrl(url) {
-    if (typeof url !== 'string') return false;
-    const trimmed = url.trim();
-    return /^https?:\/\/(?:\w+\.)?discord\.com\/api\/webhooks\/\d+\/[A-Za-z0-9._-]+$/i.test(trimmed);
-}
-
-function formatChannel(guild, channelId) {
-    if (!channelId) return 'Not configured';
-    const channel = guild?.channels?.cache?.get?.(channelId);
-    if (channel?.isTextBased?.()) {
-        return `<#${channel.id}>`;
-    }
-    return `<#${channelId}>`;
-}
-
-function formatRole(guild, roleId) {
-    if (!roleId) return 'Not configured';
-    const role = guild?.roles?.cache?.get?.(roleId);
-    if (role) {
-        return `<@&${role.id}>`;
-    }
-    return `<@&${roleId}>`;
-}
-
-function formatCategory(guild, categoryId) {
-    if (!categoryId) return 'Not configured';
-    const channel = guild?.channels?.cache?.get?.(categoryId);
-    if (channel?.type === ChannelType.GuildCategory) {
-        return `📂 ${channel.name}`;
-    }
-    return categoryId;
-}
-
-async function collectTextChannels(guild) {
-    if (!guild) return [];
-    try {
-        const collection = await guild.channels.fetch();
-        return collection
-        .filter(ch => ch && typeof ch.isTextBased === 'function' && ch.isTextBased() && !ch.isThread?.())
-        .map(ch => ch)
-        .sort((a, b) => (a.rawPosition ?? 0) - (b.rawPosition ?? 0));
-    } catch {
-        return [];
-    }
-}
-
-async function collectCategories(guild) {
-    if (!guild) return [];
-    try {
-        const collection = await guild.channels.fetch();
-        return collection
-        .filter(ch => ch?.type === ChannelType.GuildCategory)
-        .map(ch => ch)
-        .sort((a, b) => (a.rawPosition ?? 0) - (b.rawPosition ?? 0));
-    } catch {
-        return [];
-    }
-}
-
-function appendHomeButtonRow(components) {
-    components.push(new ActionRowBuilder().addComponents(
-        new ButtonBuilder()
-        .setCustomId('setup:navigate:home')
-        .setLabel('⬅ Back to overview')
-        .setStyle(ButtonStyle.Secondary)
-    ));
 }
 
 async function handleWelcomeInteraction({ interaction, entry, config, client, key, logger }) {
