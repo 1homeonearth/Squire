@@ -17,6 +17,28 @@ function trunc(str, max) {
     return value.length > max ? `${value.slice(0, max - 1)}…` : value;
 }
 
+const sanitizeMentions = (text) => typeof text === 'string'
+    ? text.replace(/<(@[!&]?|#)(\d+)>/g, '<$1\u200B$2>')
+    : '';
+
+function formatChannelLabel(channel, fallbackId) {
+    if (!channel) {
+        return fallbackId ? `**#${fallbackId}**` : '';
+    }
+
+    try {
+        const isThread = typeof channel.isThread === 'function' && channel.isThread();
+        if (isThread) {
+            const parentName = channel.parent?.name ?? channel.parentId ?? 'unknown-parent';
+            const threadName = channel.name ?? fallbackId ?? 'unknown-thread';
+            return `**#${parentName} / #${threadName}**`;
+        }
+    } catch {}
+
+    const name = channel.name ?? fallbackId;
+    return name ? `**#${name}**` : '';
+}
+
 function nextColorGen() {
     const perBridge = new Map();
     return (bridgeId) => {
@@ -276,75 +298,58 @@ function extractMedia(message) {
     return [...new Set(urls)];
 }
 
-function resolveChannelLabel(channel, fallbackId) {
-    if (!channel) {
-        return `#${fallbackId ?? 'unknown-channel'}`;
-    }
-
-    try {
-        const isThread = typeof channel.isThread === 'function' && channel.isThread();
-        if (isThread) {
-            const parentName = channel.parent?.name ?? channel.parentId ?? 'unknown-parent';
-            const threadName = channel.name ?? fallbackId ?? 'unknown-thread';
-            return `#${parentName} / #${threadName}`;
-        }
-    } catch {}
-
-    const channelName = channel.name ?? fallbackId ?? 'unknown-channel';
-    return `#${channelName}`;
-}
-
-function buildContextLine(message) {
+function buildHeaderLine(message) {
     const guildName = message.guild?.name ?? message.guildId ?? 'Unknown server';
-    const channelLabel = resolveChannelLabel(message.channel, message.channelId);
-    return `**${guildName}** • ${channelLabel}`;
+    const channelLabel = formatChannelLabel(message.channel, message.channelId);
+    const parts = [`**${guildName}**`];
+    if (channelLabel) parts.push(channelLabel);
+    return parts.filter(Boolean).join(' • ');
 }
 
-function buildContent(message, { sanitize = false } = {}) {
-    const parts = [];
-    if (message.content?.length) {
-        parts.push(sanitize ? prepareForNativeEmbed(message.content) : message.content);
-    }
-
-    const attachmentUrls = Array.from(message.attachments?.values?.() ?? [])
-        .map(att => att?.url)
-        .filter(Boolean);
-
-    if (attachmentUrls.length) {
-        parts.push(attachmentUrls.join('\n'));
-    }
-
-    if (message.stickers?.size) {
-        const stickerLines = message.stickers.map((sticker) => `🃏 Sticker: ${sticker.name}`).join('\n');
-        if (stickerLines) parts.push(stickerLines);
-    }
+function buildPresentation({ bridgeId, bridge, message }) {
+    const rawContent = message.content ?? '';
+    const hasYouTube = isYouTubeUrl(rawContent);
+    const preparedContent = hasYouTube ? prepareForNativeEmbed(rawContent) : rawContent;
+    const trimmedContent = sanitizeMentions((preparedContent || '').trim());
+    const normalizedContent = trimmedContent.length ? trunc(trimmedContent, 4096) : '';
 
     const pollLines = formatPollLines(message.poll);
-    if (pollLines.length) {
-        const block = pollLines.join('\n');
-        parts.push(sanitize ? prepareForNativeEmbed(block) : block);
-    }
+    const pollCombined = pollLines.length ? pollLines.join('\n') : '';
+    const pollForEmbed = pollCombined.length ? sanitizeMentions(trunc(pollCombined, 1024)) : '';
+    const pollForContent = pollCombined.length ? sanitizeMentions(trunc(pollCombined, 1500)) : '';
 
-    let combined = parts.join('\n\n');
-    if (sanitize) {
-        combined = prepareForNativeEmbed(combined);
-    }
-    return combined.length > MAX_CONTENT_LENGTH
-        ? trunc(combined, MAX_CONTENT_LENGTH)
-        : combined;
-}
+    const stickerLines = message.stickers?.size
+        ? message.stickers.map((sticker) => `🃏 Sticker: ${sticker.name}`).join('\n')
+        : '';
+    const stickersForEmbed = stickerLines.length ? sanitizeMentions(trunc(stickerLines, 1024)) : '';
+    const stickersForContent = stickerLines.length ? sanitizeMentions(trunc(stickerLines, 500)) : '';
 
-function buildEmbed({ bridgeId, bridge, message }) {
-    const color = nextColor(bridgeId);
+    const headerLine = buildHeaderLine(message);
+    const headerForContent = sanitizeMentions(headerLine);
+
+    const baseParts = [];
+    if (headerLine) baseParts.push(headerLine);
+    if (normalizedContent) baseParts.push(normalizedContent);
+    if (pollForEmbed) baseParts.push(pollForEmbed);
+    if (stickersForEmbed) baseParts.push(stickersForEmbed);
+
+    const viewLink = `[View message](https://discord.com/channels/${message.guildId}/${message.channelId}/${message.id})`;
+    const baseDescription = baseParts.join('\n\n').trim();
+    const spacer = baseDescription.length ? '\n\n' : '';
+    const maxBaseLength = Math.max(0, 4096 - viewLink.length - spacer.length);
+    const safeBase = baseDescription.length ? trunc(baseDescription, maxBaseLength) : '';
+    const combinedDescription = `${safeBase}${spacer}${viewLink}`.trim();
+
     const embed = new EmbedBuilder()
-    .setColor(color)
-    .setTimestamp(message.createdTimestamp ?? Date.now())
-    .setFooter({
-        text: `Bridge: ${bridge.name ?? bridgeId}`.slice(0, 2048)
-    });
+        .setColor(nextColor(bridgeId))
+        .setTimestamp(message.createdTimestamp ?? Date.now())
+        .setFooter({ text: `Bridge: ${bridge.name ?? bridgeId}`.slice(0, 2048) });
 
-    const contextLine = buildContextLine(message);
-    embed.setDescription(contextLine.slice(0, 4096));
+    if (combinedDescription.length) {
+        embed.setDescription(combinedDescription);
+    } else {
+        embed.setDescription('\u200B');
+    }
 
     const media = extractMedia(message);
     if (media.length) {
@@ -352,7 +357,20 @@ function buildEmbed({ bridgeId, bridge, message }) {
         embed.setImage(preferred);
     }
 
-    return embed;
+    const attachmentUrls = Array.from(message.attachments?.values?.() ?? [])
+        .map(att => att?.url)
+        .filter(Boolean);
+
+    return {
+        hasYouTube,
+        embed,
+        headerForContent,
+        normalizedContent,
+        pollForContent,
+        stickersForContent,
+        attachmentUrls,
+        media
+    };
 }
 
 function resolveUsername(message) {
@@ -366,27 +384,35 @@ function resolveAvatar(message) {
 }
 
 function prepareSendPayload({ message, bridgeId, bridge }) {
-    const hasYouTube = isYouTubeUrl(message.content ?? '');
-    const content = buildContent(message, { sanitize: hasYouTube });
-    const embed = buildEmbed({ bridgeId, bridge, message });
-    const contextLine = buildContextLine(message);
+    const presentation = buildPresentation({ bridgeId, bridge, message });
     const payload = {
         username: resolveUsername(message),
         avatarURL: resolveAvatar(message),
-        allowedMentions: { parse: [] }
+        allowedMentions: { parse: [] },
+        embeds: [presentation.embed]
     };
 
-    payload.embeds = [embed];
-
-    if (hasYouTube) {
-        const messageBody = content.trim();
-        const combined = [contextLine, messageBody].filter(Boolean).join('\n\n').trim();
-        if (combined.length) {
-            payload.content = combined;
+    if (presentation.hasYouTube) {
+        const parts = [];
+        if (presentation.headerForContent) parts.push(presentation.headerForContent);
+        if (presentation.normalizedContent) parts.push(trunc(presentation.normalizedContent, MAX_CONTENT_LENGTH));
+        if (presentation.pollForContent) parts.push(trunc(presentation.pollForContent, MAX_CONTENT_LENGTH));
+        if (presentation.stickersForContent) parts.push(trunc(presentation.stickersForContent, MAX_CONTENT_LENGTH));
+        if (presentation.attachmentUrls.length) parts.push(presentation.attachmentUrls.join('\n'));
+        const payloadContent = trunc(parts.join('\n\n').trim(), MAX_CONTENT_LENGTH);
+        if (payloadContent.length === 0 && !presentation.media.length) {
+            return null;
+        }
+        if (payloadContent.length) {
+            payload.content = payloadContent;
         }
     } else {
-        if (content.length) {
-            payload.content = content;
+        const contentParts = [];
+        if (presentation.headerForContent) contentParts.push(trunc(presentation.headerForContent, MAX_CONTENT_LENGTH));
+        if (presentation.pollForContent) contentParts.push(trunc(presentation.pollForContent, MAX_CONTENT_LENGTH));
+        if (presentation.stickersForContent) contentParts.push(trunc(presentation.stickersForContent, MAX_CONTENT_LENGTH));
+        if (contentParts.length) {
+            payload.content = trunc(contentParts.join('\n\n'), MAX_CONTENT_LENGTH);
         }
     }
 
@@ -394,25 +420,31 @@ function prepareSendPayload({ message, bridgeId, bridge }) {
 }
 
 function prepareEditPayload({ message, bridgeId, bridge }) {
-    const hasYouTube = isYouTubeUrl(message.content ?? '');
-    const content = buildContent(message, { sanitize: hasYouTube });
-    const embed = buildEmbed({ bridgeId, bridge, message });
-    const contextLine = buildContextLine(message);
+    const presentation = buildPresentation({ bridgeId, bridge, message });
     const payload = {
-        allowedMentions: { parse: [] }
+        allowedMentions: { parse: [] },
+        embeds: [presentation.embed]
     };
-    payload.embeds = [embed];
-    if (hasYouTube) {
-        const messageBody = content.trim();
-        const combined = [contextLine, messageBody].filter(Boolean).join('\n\n').trim();
-        payload.content = combined.length ? combined : '';
+
+    if (presentation.hasYouTube) {
+        const parts = [];
+        if (presentation.headerForContent) parts.push(trunc(presentation.headerForContent, MAX_CONTENT_LENGTH));
+        if (presentation.normalizedContent) parts.push(trunc(presentation.normalizedContent, MAX_CONTENT_LENGTH));
+        if (presentation.pollForContent) parts.push(trunc(presentation.pollForContent, MAX_CONTENT_LENGTH));
+        if (presentation.stickersForContent) parts.push(trunc(presentation.stickersForContent, MAX_CONTENT_LENGTH));
+        if (presentation.attachmentUrls.length) parts.push(presentation.attachmentUrls.join('\n'));
+        const payloadContent = trunc(parts.join('\n\n').trim(), MAX_CONTENT_LENGTH);
+        payload.content = payloadContent;
     } else {
-        if (content.length) {
-            payload.content = content;
-        } else {
-            payload.content = '';
-        }
+        const contentParts = [];
+        if (presentation.headerForContent) contentParts.push(trunc(presentation.headerForContent, MAX_CONTENT_LENGTH));
+        if (presentation.pollForContent) contentParts.push(trunc(presentation.pollForContent, MAX_CONTENT_LENGTH));
+        if (presentation.stickersForContent) contentParts.push(trunc(presentation.stickersForContent, MAX_CONTENT_LENGTH));
+        payload.content = contentParts.length
+            ? trunc(contentParts.join('\n\n'), MAX_CONTENT_LENGTH)
+            : '';
     }
+
     return payload;
 }
 
@@ -535,6 +567,7 @@ export async function init({ client, config, logger }) {
                 if (!targets.length) continue;
 
                 const payload = prepareSendPayload({ message, bridgeId, bridge });
+                if (!payload) continue;
 
                 for (const target of targets) {
                     try {
