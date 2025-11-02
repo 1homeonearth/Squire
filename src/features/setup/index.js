@@ -1081,8 +1081,8 @@ async function buildLoggingView({ config, client, guild, mode, context }) {
 
         if (channels.length) {
             menu.addOptions(channels.slice(0, 25).map((ch) => ({
-                label: truncateName(ch.name, 100),
-                description: `#${ch.name} — ID ${ch.id}`.slice(0, 100),
+                label: `ID: ${ch.id}`.slice(0, 100),
+                description: `#${truncateName(ch.name, 90)}`.slice(0, 100),
                 value: ch.id,
                 default: meta[context?.sourceGuildId ?? selectedGuildId]?.channelId === ch.id
             })));
@@ -1122,8 +1122,8 @@ async function buildLoggingView({ config, client, guild, mode, context }) {
 
         if (channels.length) {
             menu.addOptions(channels.slice(0, 24).map((ch) => ({
-                label: truncateName(ch.name, 100),
-                description: `#${ch.name} — ${ch.id}`.slice(0, 100),
+                label: `ID: ${ch.id}`.slice(0, 100),
+                description: `#${truncateName(ch.name, 90)}`.slice(0, 100),
                 value: ch.id,
                 default: config.loggingChannels?.[category] === ch.id
             })));
@@ -1142,8 +1142,8 @@ async function buildLoggingView({ config, client, guild, mode, context }) {
 
         if (sourceChannels.length) {
             channelMenu.addOptions(sourceChannels.slice(0, 25).map((ch) => ({
-                label: truncateName(ch.name, 100),
-                description: `#${ch.name}`.slice(0, 100),
+                label: `ID: ${ch.id}`.slice(0, 100),
+                description: `#${truncateName(ch.name, 90)}`.slice(0, 100),
                 value: ch.id,
                 default: (excludeChannels[selectedGuildId] || []).includes(ch.id)
             })));
@@ -1644,11 +1644,11 @@ async function buildWelcomeView({ config, client, guild, mode, context }) {
     if (!selectedGuild || mode === 'chooseGuild') {
         helpLines.push('• Pick a main server below to configure welcome cards for that community.');
     } else if (mode === 'channels') {
-        helpLines.push('• Use each dropdown to choose which channel should receive the welcome content.');
+        helpLines.push('• Use each dropdown to choose which channel ID should receive the welcome content.');
         helpLines.push('• Select **Clear channel** to remove an assignment.');
         helpLines.push('• Use **Back to role settings** to adjust role assignments.');
     } else {
-        helpLines.push('• Update the role dropdowns to map each automation hook to a Discord role.');
+        helpLines.push('• Update the role ID dropdowns to map each automation hook to a Discord role.');
         helpLines.push('• Choose **Clear selection** to remove an assignment.');
         helpLines.push('• Use **Configure channels** to adjust welcome, rules, roles, and verify targets.');
     }
@@ -1817,8 +1817,8 @@ function buildChannelSelect({ customId, placeholder, channels, currentId }) {
 
     for (const ch of channels.slice(0, 24)) {
         options.push({
-            label: truncateName(ch.name, 100),
-            description: `#${ch.name}`.slice(0, 100),
+            label: `ID: ${ch.id}`.slice(0, 100),
+            description: `#${truncateName(ch.name, 95)}`.slice(0, 100),
             value: ch.id,
             default: ch.id === currentId
         });
@@ -1861,8 +1861,8 @@ function buildRoleSelect({ customId, placeholder, roles, currentId }) {
     for (const role of roles) {
         if (options.length >= 25) break;
         options.push({
-            label: truncateName(role.name, 100),
-            description: `ID: ${role.id}`.slice(0, 100),
+            label: `ID: ${role.id}`.slice(0, 100),
+            description: truncateName(role.name, 100),
             value: role.id,
             default: role.id === currentId
         });
@@ -2403,8 +2403,8 @@ async function buildRainbowBridgeView({ config, client, guildOptions, mode, cont
 
             if (channels.length) {
                 menu.addOptions(channels.slice(0, 25).map((channel) => ({
-                    label: truncateName(channel.name, 100),
-                    description: `#${channel.name}`.slice(0, 100),
+                    label: `ID: ${channel.id}`.slice(0, 100),
+                    description: `#${truncateName(channel.name, 90)}`.slice(0, 100),
                     value: channel.id
                 })));
             } else {
@@ -2702,8 +2702,8 @@ async function buildAutobouncerView({ config, client, mode = 'default', context 
             for (const role of roles) {
                 if (roleOptions.length >= 25) break;
                 roleOptions.push({
-                    label: truncateName(role.name, 100),
-                    description: `ID: ${role.id}`.slice(0, 100),
+                    label: `ID: ${role.id}`.slice(0, 100),
+                    description: truncateName(role.name, 100),
                     value: role.id,
                     default: role.id === currentRoleId
                 });
@@ -2814,8 +2814,8 @@ async function buildAutobouncerView({ config, client, mode = 'default', context 
 
     if (channels.length) {
         channelMenu.addOptions(channels.slice(0, 24).map(ch => ({
-            label: truncateName(ch.name, 100),
-            description: `#${ch.name}`.slice(0, 100),
+            label: `ID: ${ch.id}`.slice(0, 100),
+            description: `#${truncateName(ch.name, 90)}`.slice(0, 100),
             value: ch.id,
             default: notifyChannelId === ch.id
         })));
