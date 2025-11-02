@@ -44,15 +44,13 @@ cd Squire-main
 
 ## Module setup integration
 
-The `/setup` command discovers feature-specific UI helpers directly from each module. Every feature that exposes settings should ship a companion `setup.js` file alongside its runtime entry point (for example `src/features/welcome-cards/setup.js`). That file exports a factory such as `createWelcomeSetup(deps)` which returns three methods:
+The `/setup` command is orchestrated by `src/features/setup/index.js`. During `init` it instantiates the `createLoggingSetup`, `createWelcomeSetup`, `createRainbowBridgeSetup`, and `createAutobouncerSetup` factories (one per feature module) and hands them shared helpers such as `panelStore`, `saveConfig`, `fetchGuild`, and `collectManageableGuilds`. Each factory must return at least three functions:
 
-- `prepareConfig(config, context?)` — coerce/normalise config values the module expects.
-- `buildView({ config, client, ... })` — render the Discord components for the current panel state.
-- `handleInteraction({ interaction, ... })` — mutate config + panel state in response to button/select/modal events.
+- `prepareConfig(config, context?)` — coerce/normalise config values the module expects. The setup feature calls this inside `ensureConfigShape(...)` so every module sees consistent data before any interaction fires.
+- `buildView({ config, client, ... })` — render the embed + component rows for the current panel state. When an admin selects a module from the home screen, setup calls this function and caches the resulting Discord message plus view state inside `panelStore` under a `${userId}:${module}` key.
+- `handleInteraction({ interaction, entry, ... })` — react to button/select/modal events, mutating the config (via `saveConfig`) and updating the stored view state. Interaction `customId` values embed the module name so `extractModuleFromInteraction(...)` can route each submission to the right handler.
 
-The setup feature wires these factories together by passing shared helpers (`panelStore`, `saveConfig`, `fetchGuild`, etc.) and automatically refreshes views when the module reports an update. Shared UI primitives such as `appendHomeButtonRow`, channel/role formatting, and ID sanitisation live in `src/features/setup/shared.js` so new modules can opt-in without duplicating logic.
-
-When building a new module, add its `setup.js` file, export a `create<Module>Setup` factory with the methods above, and import any required helpers from `src/features/setup/shared.js`. Once that file exists, `/setup` automatically adds the module to the home menu and routes interactions to it.
+Shared UI helpers (`appendHomeButtonRow`, channel/role formatting, ID sanitation, webhook validation, etc.) live in `src/features/setup/shared.js` so feature authors can reuse consistent building blocks. When you add a new module with settings, include a companion `setup.js` that exports `create<Module>Setup`, update the module dropdown in `buildHomeView(...)`, and lean on the shared helpers for consistent UX. With that file in place, the setup command automatically recognises the module and populates its panels with your custom view/interaction logic.
 
 ## Repository layout
 

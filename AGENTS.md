@@ -7,6 +7,13 @@ Secrets never live in git; they come from the server environment at deploy.
 — Runtime: Node.js 22.x in production (Node 20 tested locally).
 — Config model: derived from server env; no plaintext secrets in the repo.
 
+## Setup panel architecture primer
+- The `/setup` slash command lives in `src/features/setup/index.js`. During `init` it instantiates each module’s factory (for example `createLoggingSetup`, `createWelcomeSetup`, etc.) from the module’s `setup.js` file and hands them shared helpers such as `panelStore`, `saveConfig`, and `fetchGuild`.
+- Every module-specific factory must return at least `prepareConfig`, `buildView`, and `handleInteraction`. The setup feature calls `prepareConfig` inside `ensureConfigShape` before interactions start so each module’s expected config shape is normalised.
+- When a user opens a module from the home panel, the setup feature calls that module’s `buildView(...)` to render the initial embed/components and caches the resulting message + state in `panelStore` under a `${userId}:${module}` key.
+- Subsequent component or modal submissions include the module name inside `customId`. `extractModuleFromInteraction` resolves it and dispatches to the module’s `handleInteraction(...)`, passing the cached state from `panelStore` so the module can update the UI and persist config changes via `saveConfig`.
+- When you add a new feature module, ship a `setup.js` with that factory signature, update the module selector in `buildHomeView`, and rely on the shared helpers in `src/features/setup/shared.js` for consistent formatting and ID hygiene.
+
 ## Local dev & checks
 Use Node.js 22 locally. Install deps with `npm ci`. Keep `package.json` scripts exactly as:
 
