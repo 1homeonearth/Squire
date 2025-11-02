@@ -171,6 +171,8 @@ export function init({ client, logger, config }) {
     let currentConfig = config;
     let crossIndex = buildCrossVerificationIndex(currentConfig);
     const autobannedMembers = new Map(); // key -> timeout handle
+    const welcomeMessages = new Map(); // key -> { channelId, messageId, messageRef, timeout }
+    const welcomeCleanupTimers = new Map();
 
     const rememberAutoban = (guildId, userId) => {
         if (!guildId || !userId) return;
@@ -202,6 +204,111 @@ export function init({ client, logger, config }) {
         return true;
     };
 
+    const trackWelcomeMessage = (guildId, userId, message) => {
+        if (!guildId || !userId || !message) return;
+        const messageId = message.id ?? null;
+        const channelId = message.channelId ?? message.channel?.id ?? null;
+        if (!messageId || !channelId) return;
+        const key = `${guildId}:${userId}`;
+        const existing = welcomeMessages.get(key);
+        if (existing?.timeout) clearTimeout(existing.timeout);
+        const timeout = setTimeout(() => {
+            welcomeMessages.delete(key);
+        }, 10 * 60 * 1000);
+        welcomeMessages.set(key, {
+            channelId,
+            messageId,
+            messageRef: typeof message.delete === 'function' ? message : null,
+            timeout
+        });
+    };
+
+    const clearTrackedWelcomeMessage = (key) => {
+        const entry = welcomeMessages.get(key);
+        if (entry?.timeout) {
+            clearTimeout(entry.timeout);
+        }
+        welcomeMessages.delete(key);
+        const retryTimer = welcomeCleanupTimers.get(key);
+        if (retryTimer) {
+            clearTimeout(retryTimer);
+            welcomeCleanupTimers.delete(key);
+        }
+        return entry ?? null;
+    };
+
+    const scheduleCleanupRetry = (guildId, userId, attempt, maxAttempts, channelHint) => {
+        const key = `${guildId}:${userId}`;
+        const delay = Math.min(1000, 250 * (attempt + 1));
+        const existing = welcomeCleanupTimers.get(key);
+        if (existing) clearTimeout(existing);
+        const timer = setTimeout(() => {
+            welcomeCleanupTimers.delete(key);
+            purgeWelcomeMessage(guildId, userId, { attempt: attempt + 1, maxAttempts, channelHint });
+        }, delay);
+        welcomeCleanupTimers.set(key, timer);
+    };
+
+    async function purgeWelcomeMessage(guildId, userId, { attempt = 0, maxAttempts = 6, channelHint = null } = {}) {
+        if (!guildId || !userId) return;
+        const key = `${guildId}:${userId}`;
+        const entry = clearTrackedWelcomeMessage(key);
+
+        if (!entry) {
+            if (attempt < maxAttempts) {
+                scheduleCleanupRetry(guildId, userId, attempt, maxAttempts, channelHint);
+            }
+            return;
+        }
+
+        const candidateChannelId = entry.channelId ?? channelHint ?? null;
+
+        if (entry.messageRef && typeof entry.messageRef.delete === 'function') {
+            try {
+                await entry.messageRef.delete();
+                return;
+            } catch (err) {
+                logger?.warn?.(`[welcome] Failed to delete welcome card message ${entry.messageId} directly: ${err?.message ?? err}`);
+            }
+        }
+
+        if (!candidateChannelId) {
+            return;
+        }
+
+        let channel = client.channels?.cache?.get?.(candidateChannelId) ?? null;
+        if (!channel && typeof client.channels?.fetch === 'function') {
+            try {
+                channel = await client.channels.fetch(candidateChannelId);
+            } catch {}
+        }
+        if (!channel?.isTextBased?.()) {
+            return;
+        }
+
+        try {
+            const messagesManager = channel.messages ?? null;
+            if (!messagesManager) return;
+            let message = messagesManager.cache?.get?.(entry.messageId) ?? null;
+            if (!message && typeof messagesManager.fetch === 'function') {
+                try {
+                    message = await messagesManager.fetch(entry.messageId);
+                } catch {}
+            }
+
+            if (message && typeof message.delete === 'function') {
+                await message.delete();
+                return;
+            }
+
+            if (typeof messagesManager.delete === 'function') {
+                await messagesManager.delete(entry.messageId);
+            }
+        } catch (err) {
+            logger?.warn?.(`[welcome] Failed to remove welcome card ${entry.messageId} from ${candidateChannelId}: ${err?.message ?? err}`);
+        }
+    }
+
     client.on('squire:configUpdated', (nextConfig) => {
         if (!nextConfig) return;
         currentConfig = nextConfig;
@@ -219,7 +326,9 @@ export function init({ client, logger, config }) {
     client.on('squire:autoban:banned', (payload) => {
         const guildId = payload?.guildId;
         const userId = payload?.userId;
+        const welcomeChannelId = payload?.welcomeChannelId ?? null;
         rememberAutoban(guildId, userId);
+        purgeWelcomeMessage(guildId, userId, { channelHint: welcomeChannelId });
     });
 
     client.on('squire:autoban:failed', (payload) => {
@@ -338,7 +447,8 @@ export function init({ client, logger, config }) {
                 payload.files = [image];
             }
 
-            await channel.send(payload);
+            const sentMessage = await channel.send(payload);
+            trackWelcomeMessage(member.guild.id, member.id, sentMessage);
         } catch (e) {
             const name = member.guild?.name ?? member.guild?.id ?? 'unknown guild';
             const msg = e?.message || e;

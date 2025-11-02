@@ -409,6 +409,7 @@ function prepareSendPayload({ message, bridgeId, bridge }) {
     } else {
         const contentParts = [];
         if (presentation.headerForContent) contentParts.push(trunc(presentation.headerForContent, MAX_CONTENT_LENGTH));
+        if (presentation.normalizedContent) contentParts.push(trunc(presentation.normalizedContent, MAX_CONTENT_LENGTH));
         if (presentation.pollForContent) contentParts.push(trunc(presentation.pollForContent, MAX_CONTENT_LENGTH));
         if (presentation.stickersForContent) contentParts.push(trunc(presentation.stickersForContent, MAX_CONTENT_LENGTH));
         if (contentParts.length) {
@@ -438,6 +439,7 @@ function prepareEditPayload({ message, bridgeId, bridge }) {
     } else {
         const contentParts = [];
         if (presentation.headerForContent) contentParts.push(trunc(presentation.headerForContent, MAX_CONTENT_LENGTH));
+        if (presentation.normalizedContent) contentParts.push(trunc(presentation.normalizedContent, MAX_CONTENT_LENGTH));
         if (presentation.pollForContent) contentParts.push(trunc(presentation.pollForContent, MAX_CONTENT_LENGTH));
         if (presentation.stickersForContent) contentParts.push(trunc(presentation.stickersForContent, MAX_CONTENT_LENGTH));
         payload.content = contentParts.length
