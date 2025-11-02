@@ -306,7 +306,7 @@ function buildHeaderLine(message) {
     return parts.filter(Boolean).join(' • ');
 }
 
-function buildPresentation({ bridgeId, bridge, message }) {
+function buildPresentation({ bridgeId, message }) {
     const rawContent = message.content ?? '';
     const hasYouTube = isYouTubeUrl(rawContent);
     const preparedContent = hasYouTube ? prepareForNativeEmbed(rawContent) : rawContent;
@@ -341,9 +341,7 @@ function buildPresentation({ bridgeId, bridge, message }) {
     const combinedDescription = `${safeBase}${spacer}${viewLink}`.trim();
 
     const embed = new EmbedBuilder()
-        .setColor(nextColor(bridgeId))
-        .setTimestamp(message.createdTimestamp ?? Date.now())
-        .setFooter({ text: `Bridge: ${bridge.name ?? bridgeId}`.slice(0, 2048) });
+        .setColor(nextColor(bridgeId));
 
     if (combinedDescription.length) {
         embed.setDescription(combinedDescription);
@@ -383,8 +381,8 @@ function resolveAvatar(message) {
     return message.member?.displayAvatarURL?.() || message.author?.displayAvatarURL?.() || null;
 }
 
-function prepareSendPayload({ message, bridgeId, bridge }) {
-    const presentation = buildPresentation({ bridgeId, bridge, message });
+function prepareSendPayload({ message, bridgeId }) {
+    const presentation = buildPresentation({ bridgeId, message });
     const payload = {
         username: resolveUsername(message),
         avatarURL: resolveAvatar(message),
@@ -420,8 +418,8 @@ function prepareSendPayload({ message, bridgeId, bridge }) {
     return payload;
 }
 
-function prepareEditPayload({ message, bridgeId, bridge }) {
-    const presentation = buildPresentation({ bridgeId, bridge, message });
+function prepareEditPayload({ message, bridgeId }) {
+    const presentation = buildPresentation({ bridgeId, message });
     const payload = {
         allowedMentions: { parse: [] },
         embeds: [presentation.embed]
@@ -568,7 +566,7 @@ export async function init({ client, config, logger }) {
                 });
                 if (!targets.length) continue;
 
-                const payload = prepareSendPayload({ message, bridgeId, bridge });
+                const payload = prepareSendPayload({ message, bridgeId });
                 if (!payload) continue;
 
                 for (const target of targets) {
@@ -618,7 +616,7 @@ export async function init({ client, config, logger }) {
                     }
                     return true;
                 });
-                const payload = prepareEditPayload({ message, bridgeId, bridge });
+                const payload = prepareEditPayload({ message, bridgeId });
 
                 for (const target of targets) {
                     const forwarded = getForwardedRecord(record, target);
