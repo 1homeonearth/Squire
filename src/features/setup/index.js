@@ -2465,6 +2465,43 @@ async function buildRainbowBridgeView({ config, client, guildOptions: _guildOpti
     return { embeds: [embed], components };
 }
 
+function buildRainbowBridgeAddChannelModal({ bridgeId, guildId }) {
+    const sanitizedGuildId = sanitizeSnowflakeId(guildId);
+    const guildInput = new TextInputBuilder()
+    .setCustomId('setup:rainbow:addChannelGuildId')
+    .setLabel('Guild ID')
+    .setPlaceholder('123456789012345678')
+    .setStyle(TextInputStyle.Short)
+    .setRequired(true);
+
+    if (sanitizedGuildId) {
+        guildInput.setValue(sanitizedGuildId);
+    }
+
+    const channelInput = new TextInputBuilder()
+    .setCustomId('setup:rainbow:addChannelId')
+    .setLabel('Channel ID')
+    .setPlaceholder('123456789012345678')
+    .setStyle(TextInputStyle.Short)
+    .setRequired(true);
+
+    const webhookInput = new TextInputBuilder()
+    .setCustomId('setup:rainbow:addChannelWebhook')
+    .setLabel('Existing webhook URL (optional)')
+    .setPlaceholder('https://discord.com/api/webhooks/...')
+    .setStyle(TextInputStyle.Short)
+    .setRequired(false);
+
+    return new ModalBuilder()
+    .setCustomId(`setup:rainbow:addChannelModal:${bridgeId}`)
+    .setTitle('Add channel to bridge')
+    .addComponents(
+        new ActionRowBuilder().addComponents(guildInput),
+        new ActionRowBuilder().addComponents(channelInput),
+        new ActionRowBuilder().addComponents(webhookInput)
+    );
+}
+
 async function handleAutobouncerInteraction({ interaction, entry, config, key, logger, client }) {
     if (interaction.isButton()) {
         const action = interaction.customId.split(':')[2];
