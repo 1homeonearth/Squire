@@ -42,6 +42,18 @@ cd Squire-main
   - Provides the `/setup` slash command that gives admins an in-Discord control panel for every module.
   - Manages logging destinations, welcome channel reminders, rainbow bridge links, and autobouncer keywords without editing `config.json` manually.
 
+## Module setup integration
+
+The `/setup` command discovers feature-specific UI helpers directly from each module. Every feature that exposes settings should ship a companion `setup.js` file alongside its runtime entry point (for example `src/features/welcome-cards/setup.js`). That file exports a factory such as `createWelcomeSetup(deps)` which returns three methods:
+
+- `prepareConfig(config, context?)` — coerce/normalise config values the module expects.
+- `buildView({ config, client, ... })` — render the Discord components for the current panel state.
+- `handleInteraction({ interaction, ... })` — mutate config + panel state in response to button/select/modal events.
+
+The setup feature wires these factories together by passing shared helpers (`panelStore`, `saveConfig`, `fetchGuild`, etc.) and automatically refreshes views when the module reports an update. Shared UI primitives such as `appendHomeButtonRow`, channel/role formatting, and ID sanitisation live in `src/features/setup/shared.js` so new modules can opt-in without duplicating logic.
+
+When building a new module, add its `setup.js` file, export a `create<Module>Setup` factory with the methods above, and import any required helpers from `src/features/setup/shared.js`. Once that file exists, `/setup` automatically adds the module to the home menu and routes interactions to it.
+
 ## Repository layout
 
 ```

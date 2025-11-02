@@ -1,7 +1,16 @@
 import { expect, it } from 'vitest';
 import { ComponentType } from 'discord.js';
 
-import { buildAutobouncerView, buildLoggingView, buildWelcomeView } from '../src/features/setup/index.js';
+import { createAutobouncerSetup } from '../src/features/auto-bouncer/setup.js';
+import { createLoggingSetup } from '../src/features/logging-forwarder/setup.js';
+import { createWelcomeSetup } from '../src/features/welcome-cards/setup.js';
+
+function createDeps() {
+    const panelStore = new Map();
+    const saveConfig = () => {};
+    const fetchGuild = async (client, guildId) => client.guilds.fetch(guildId);
+    return { panelStore, saveConfig, fetchGuild };
+}
 
 it('buildLoggingView summarises mapping state and controls', async () => {
     const loggingGuildChannels = new Map([
@@ -26,7 +35,9 @@ it('buildLoggingView summarises mapping state and controls', async () => {
         channels: { cache: sourceGuildChannels, fetch: async () => sourceGuildChannels }
     };
 
-    const view = await buildLoggingView({
+    const loggingSetup = createLoggingSetup(createDeps());
+
+    const view = await loggingSetup.buildView({
         config: {
             loggingServerId: '999',
             forwardBots: false,
@@ -107,7 +118,9 @@ it('buildWelcomeView surfaces role selections with role picker controls', async 
         }
     };
 
-    const view = await buildWelcomeView({
+    const welcomeSetup = createWelcomeSetup(createDeps());
+
+    const view = await welcomeSetup.buildView({
         config,
         client,
         guild,
@@ -181,7 +194,9 @@ it('buildAutobouncerView summarises stale-role sweeps and exposes test role cont
         }
     };
 
-    const view = await buildAutobouncerView({ config, client });
+    const autobouncerSetup = createAutobouncerSetup(createDeps());
+
+    const view = await autobouncerSetup.buildView({ config, client });
     const embed = view.embeds[0];
     const embedData = embed.data ?? embed.toJSON?.() ?? {};
     const roleField = embedData.fields.find((field) => field.name === 'Role sweeps');

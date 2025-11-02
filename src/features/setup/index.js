@@ -4,33 +4,23 @@ import {
     PermissionFlagsBits,
     EmbedBuilder,
     ActionRowBuilder,
-    ButtonBuilder,
-    ButtonStyle,
-    StringSelectMenuBuilder,
-    ModalBuilder,
-    TextInputBuilder,
-    TextInputStyle,
-    ChannelType
+    StringSelectMenuBuilder
 } from 'discord.js';
 
 import { writeConfig } from '../../core/config.js';
-import { normalizeRainbowBridgeConfig, refresh as refreshRainbowBridge } from '../rainbow-bridge/index.js';
-import {
-    DEFAULT_WELCOME_MESSAGE,
-    LEGACY_DEFAULT_WELCOME_MESSAGE,
-    sanitizeWelcomeMessage,
-    WELCOME_TEMPLATE_PLACEHOLDERS
-} from '../welcome-cards/template.js';
-
-const LOGGING_CHANNEL_CATEGORIES = [
-    { key: 'messages', label: 'Message logs', description: 'Cross-server message forwards.' },
-    { key: 'moderation', label: 'Moderation alerts', description: 'Bans, kicks, warnings and escalations.' },
-    { key: 'joins', label: 'Join & leave', description: 'Member join/leave notifications.' },
-    { key: 'system', label: 'System notices', description: 'Automation updates and bot diagnostics.' }
-];
+import { createLoggingSetup } from '../logging-forwarder/setup.js';
+import { createWelcomeSetup } from '../welcome-cards/setup.js';
+import { createRainbowBridgeSetup } from '../rainbow-bridge/setup.js';
+import { createAutobouncerSetup } from '../auto-bouncer/setup.js';
+import { appendHomeButtonRow, formatChannel, truncateName } from './shared.js';
 
 const panelStore = new Map(); // `${userId}:${module}` -> { message, guildId, mode, context }
 let activeClient = null;
+
+const loggingSetup = createLoggingSetup({ panelStore, saveConfig, fetchGuild });
+const welcomeSetup = createWelcomeSetup({ panelStore, saveConfig, fetchGuild });
+const rainbowSetup = createRainbowBridgeSetup({ panelStore, saveConfig, fetchGuild, collectManageableGuilds });
+const autobouncerSetup = createAutobouncerSetup({ panelStore, saveConfig, fetchGuild });
 
 export const commands = [
     new SlashCommandBuilder()
@@ -99,22 +89,22 @@ export function init({ client, config, logger }) {
             const entry = panelStore.get(key);
 
             if (module === 'logging') {
-                await handleLoggingInteraction({ interaction, entry, config, client, logger, key });
+                await loggingSetup.handleInteraction({ interaction, entry, config, client, logger, key });
                 return;
             }
 
             if (module === 'welcome') {
-                await handleWelcomeInteraction({ interaction, entry, config, client, key, logger });
+                await welcomeSetup.handleInteraction({ interaction, entry, config, client, key, logger });
                 return;
             }
 
             if (module === 'autobouncer') {
-                await handleAutobouncerInteraction({ interaction, entry, config, key, logger, client });
+                await autobouncerSetup.handleInteraction({ interaction, entry, config, key, logger, client });
                 return;
             }
 
             if (module === 'rainbow') {
-                await handleRainbowBridgeInteraction({ interaction, entry, config, key, client, logger });
+                await rainbowSetup.handleInteraction({ interaction, entry, config, key, client, logger });
                 return;
             }
         } catch (err) {
@@ -129,59 +119,19 @@ export function init({ client, config, logger }) {
 }
 
 function ensureConfigShape(config) {
-    config.mapping = coerceRecord(config.mapping);
-    config.excludeChannels = mapValuesToArray(config.excludeChannels);
-    config.excludeCategories = mapValuesToArray(config.excludeCategories);
-    config.loggingWebhookMeta = coerceRecord(config.loggingWebhookMeta);
-    config.loggingChannels = coerceRecord(config.loggingChannels);
-
     const derivedMain = Object.keys(config.mapping || {});
     config.mainServerIds = sanitizeIdArray(Array.isArray(config.mainServerIds) ? config.mainServerIds : derivedMain);
     if (config.loggingServerId) {
         config.mainServerIds = config.mainServerIds.filter(id => id !== config.loggingServerId);
     }
 
-    config.welcome = normalizeWelcomeMap({
-        value: config.welcome,
+    loggingSetup.prepareConfig(config);
+    welcomeSetup.prepareConfig(config, {
         fallbackGuilds: config.mainServerIds,
         loggingServerId: config.loggingServerId
     });
-
-    if (!config.autoban || typeof config.autoban !== 'object') {
-        config.autoban = {};
-    }
-    if (!Array.isArray(config.autoban.blockedUsernames)) {
-        const value = config.autoban.blockedUsernames;
-        config.autoban.blockedUsernames = Array.isArray(value) ? value.map(String) : [];
-    } else {
-        config.autoban.blockedUsernames = config.autoban.blockedUsernames.map(String);
-    }
-    if (!Array.isArray(config.autoban.notifyWebhookUrls)) {
-        const value = config.autoban.notifyWebhookUrls;
-        config.autoban.notifyWebhookUrls = Array.isArray(value) ? value.map(String) : [];
-    } else {
-        config.autoban.notifyWebhookUrls = config.autoban.notifyWebhookUrls.map(String);
-    }
-    if (!config.autoban.testRoleMap || typeof config.autoban.testRoleMap !== 'object') {
-        config.autoban.testRoleMap = {};
-    } else {
-        const cleaned = {};
-        for (const [guildId, roleId] of Object.entries(config.autoban.testRoleMap)) {
-            const gid = typeof guildId === 'string' ? guildId.trim() : String(guildId ?? '').trim();
-            const rid = typeof roleId === 'string' ? roleId.trim() : String(roleId ?? '').trim();
-            if (!gid || !rid) continue;
-            cleaned[gid] = rid;
-        }
-        config.autoban.testRoleMap = cleaned;
-    }
-    config.autoban.notifyChannelId = config.autoban.notifyChannelId ? String(config.autoban.notifyChannelId) : null;
-    config.autoban.scanBio = config.autoban.scanBio === false ? false : true;
-
-    if (typeof config.sampleRate !== 'number' || Number.isNaN(config.sampleRate)) {
-        config.sampleRate = 1;
-    }
-
-    config.rainbowBridge = normalizeRainbowBridgeConfig(config.rainbowBridge);
+    autobouncerSetup.prepareConfig(config);
+    rainbowSetup.prepareConfig(config);
 }
 
 function sanitizeIdArray(value) {
@@ -193,114 +143,6 @@ function sanitizeIdArray(value) {
         if (!str || seen.has(str)) continue;
         seen.add(str);
         out.push(str);
-    }
-    return out;
-}
-
-function normalizeWelcomeMap({ value, fallbackGuilds, loggingServerId }) {
-    const out = {};
-    if (!value || typeof value !== 'object') {
-        return out;
-    }
-
-    const entries = Object.entries(value);
-    const looksLegacy = 'channelId' in value || 'mentions' in value;
-    const looksMap = entries.every(([, v]) => typeof v === 'object' && !Array.isArray(v));
-
-    if (looksLegacy) {
-        const targetGuildId = fallbackGuilds?.find(id => id) || loggingServerId || null;
-        if (targetGuildId) {
-            out[targetGuildId] = normalizeWelcomeEntry(value);
-        }
-        return out;
-    }
-
-    if (!looksMap) {
-        return out;
-    }
-
-    for (const [guildId, entry] of entries) {
-        if (!guildId) continue;
-        out[String(guildId)] = normalizeWelcomeEntry(entry);
-    }
-    return out;
-}
-
-function normalizeWelcomeEntry(entry) {
-    const obj = entry && typeof entry === 'object' ? entry : {};
-    const channelId = obj.channelId ? String(obj.channelId) : null;
-    const mentions = {};
-    const rawMentions = obj.mentions && typeof obj.mentions === 'object' ? obj.mentions : {};
-    for (const key of ['rules', 'roles', 'verify']) {
-        if (rawMentions[key]) {
-            mentions[key] = String(rawMentions[key]);
-        }
-    }
-
-    const rolesSource = obj.roles && typeof obj.roles === 'object' ? obj.roles : obj;
-    const roles = {
-        unverifiedRoleId: rolesSource.unverifiedRoleId ? String(rolesSource.unverifiedRoleId) : null,
-        verifiedRoleId: rolesSource.verifiedRoleId ? String(rolesSource.verifiedRoleId) : null,
-        crossVerifiedRoleId: rolesSource.crossVerifiedRoleId ? String(rolesSource.crossVerifiedRoleId) : null,
-        moderatorRoleId: rolesSource.moderatorRoleId ? String(rolesSource.moderatorRoleId) : null
-    };
-
-    const rawPreImage = typeof obj.preImageText === 'string'
-        ? obj.preImageText
-        : (typeof obj.message === 'string' ? obj.message : null);
-
-    let preImageText = sanitizeWelcomeMessage(rawPreImage ?? '');
-    let isCustomized;
-
-    if (typeof obj.isCustomized === 'boolean') {
-        isCustomized = obj.isCustomized;
-    } else if (!rawPreImage || !rawPreImage.trim()) {
-        preImageText = DEFAULT_WELCOME_MESSAGE;
-        isCustomized = false;
-    } else {
-        const normalizedRaw = rawPreImage.replace(/\r\n/g, '\n');
-        if (normalizedRaw === LEGACY_DEFAULT_WELCOME_MESSAGE) {
-            preImageText = DEFAULT_WELCOME_MESSAGE;
-            isCustomized = false;
-        } else if (preImageText === LEGACY_DEFAULT_WELCOME_MESSAGE) {
-            preImageText = DEFAULT_WELCOME_MESSAGE;
-            isCustomized = false;
-        } else if (preImageText === DEFAULT_WELCOME_MESSAGE) {
-            isCustomized = false;
-        } else {
-            isCustomized = true;
-        }
-    }
-
-    if (preImageText === LEGACY_DEFAULT_WELCOME_MESSAGE) {
-        preImageText = DEFAULT_WELCOME_MESSAGE;
-    }
-
-    const enabled = obj.enabled === false ? false : true;
-
-    return {
-        channelId,
-        mentions,
-        preImageText,
-        isCustomized: Boolean(isCustomized),
-        enabled,
-        headerLine1: 'Welcome',
-        headerLine2Template: '{username}',
-        roles
-    };
-}
-
-function coerceRecord(value) {
-    if (!value || typeof value !== 'object' || Array.isArray(value)) return {};
-    return { ...value };
-}
-
-function mapValuesToArray(value) {
-    const out = {};
-    if (!value || typeof value !== 'object') return out;
-    for (const [key, arr] of Object.entries(value)) {
-        if (!Array.isArray(arr)) continue;
-        out[String(key)] = arr.map(String);
     }
     return out;
 }
@@ -443,77 +285,62 @@ async function buildHomeView({ client, config, guildOptions }) {
         value: opt.id,
         default: opt.id === loggingServerId
     }));
-    if (loggingGuild && !loggingOptions.find(opt => opt.value === loggingGuild.id)) {
+
+    if (loggingServerId && !loggingOptions.find(opt => opt.value === loggingServerId)) {
         loggingOptions.unshift({
-            label: truncateName(loggingGuild.name, 100),
-            description: `ID: ${loggingGuild.id}`.slice(0, 100),
-            value: loggingGuild.id,
+            label: truncateName(loggingGuild?.name ?? loggingServerId, 100),
+            description: `ID: ${loggingServerId}`.slice(0, 100),
+            value: loggingServerId,
             default: true
         });
     }
+
     if (loggingOptions.length) {
-        loggingOptions.push({
-            label: 'Clear logging server',
-            description: 'Remove the logging server configuration.',
-            value: '__clear__'
-        });
         loggingMenu.addOptions(loggingOptions);
     } else {
-        loggingMenu.addOptions({ label: 'No available servers', value: 'noop', default: true });
+        loggingMenu.addOptions({ label: 'No logging server configured', value: 'noop', default: true });
     }
     components.push(new ActionRowBuilder().addComponents(loggingMenu));
 
-    const filteredMain = options.filter(opt => opt.id !== loggingServerId);
     const mainMenu = new StringSelectMenuBuilder()
     .setCustomId('setup:home:mainServers')
-    .setPlaceholder(filteredMain.length ? 'Select main servers…' : 'Add more servers to manage')
+    .setPlaceholder(options.length ? 'Select main servers…' : 'No servers available')
     .setMinValues(0)
-    .setMaxValues(Math.max(1, Math.min(25, filteredMain.length || 1)))
-    .setDisabled(!filteredMain.length);
+    .setMaxValues(Math.min(25, options.length || 1))
+    .setDisabled(!options.length);
 
-    const mainOptions = filteredMain.map(opt => ({
+    const mainOpts = options.slice(0, 25).map(opt => ({
         label: truncateName(opt.name, 100),
         description: `ID: ${opt.id}`.slice(0, 100),
         value: opt.id,
-        default: mainServers.includes(opt.id)
+        default: config.mainServerIds?.includes(opt.id) ?? false
     }));
-    for (const id of mainServers) {
-        if (filteredMain.find(opt => opt.id === id)) continue;
-        const label = optionMap.get(id) || `Server ${id}`;
-        mainOptions.push({
-            label: truncateName(label, 100),
-            description: `ID: ${id}`.slice(0, 100),
-            value: id,
-            default: true
-        });
-    }
-    if (mainOptions.length) {
-        mainMenu.addOptions(mainOptions.slice(0, 25));
+    if (mainOpts.length) {
+        mainMenu.addOptions(mainOpts);
     } else {
-        mainMenu.addOptions({ label: 'No selectable servers', value: 'noop', default: true });
+        mainMenu.addOptions({ label: 'No main servers configured', value: 'noop', default: true });
     }
     components.push(new ActionRowBuilder().addComponents(mainMenu));
 
     const moduleMenu = new StringSelectMenuBuilder()
     .setCustomId('setup:home:module')
-    .setPlaceholder('Open a setup module…')
-    .setMinValues(1)
-    .setMaxValues(1)
+    .setPlaceholder('Open module setup…')
     .addOptions(
-        { label: 'Logging', value: 'logging', description: 'Configure webhooks and exclusions.' },
-        { label: 'Welcome cards', value: 'welcome', description: 'Choose welcome, rules, roles, and verify channels.' },
-        { label: 'Rainbow Bridge', value: 'rainbow', description: 'Link channels together for two-way sync.' },
+        { label: 'Logging', value: 'logging', description: 'Map main servers to logging channels.' },
+        { label: 'Welcome cards', value: 'welcome', description: 'Configure welcome automation and autoroles.' },
+        { label: 'Rainbow Bridge', value: 'rainbow', description: 'Link channels across servers.' },
         { label: 'Autobouncer', value: 'autobouncer', description: 'Manage autoban keywords and notification channel.' }
     );
     components.push(new ActionRowBuilder().addComponents(moduleMenu));
+
+    appendHomeButtonRow(components);
 
     return { embeds: [embed], components };
 }
 
 async function handleHomeInteraction({ interaction, config, client, logger, homeKey, homeEntry }) {
-    if (!interaction.isStringSelectMenu()) return;
-    const [, , action] = interaction.customId.split(':');
     const guildOptions = homeEntry?.guildOptions ?? await collectManageableGuilds({ client, userId: interaction.user.id });
+    const [, , action] = interaction.customId.split(':');
 
     if (action === 'loggingServer') {
         const choice = interaction.values?.[0] ?? null;
@@ -586,7 +413,7 @@ async function handleHomeInteraction({ interaction, config, client, logger, home
             const available = config.mainServerIds;
             const initialId = available.find(id => id) ?? null;
             const guild = initialId ? await fetchGuild(client, initialId) : null;
-            const view = await buildLoggingView({ config, client, guild, mode: 'default', context: {} });
+            const view = await loggingSetup.buildView({ config, client, guild, mode: 'default', context: {} });
             const message = await interaction.update(view);
             panelStore.set(moduleKey, {
                 message,
@@ -601,7 +428,7 @@ async function handleHomeInteraction({ interaction, config, client, logger, home
 
         if (target === 'welcome') {
             const available = config.mainServerIds.filter(id => id !== config.loggingServerId);
-            const view = await buildWelcomeView({ config, client, guild: null, mode: 'chooseGuild', context: { availableGuildIds: available } });
+            const view = await welcomeSetup.buildView({ config, client, guild: null, mode: 'chooseGuild', context: { availableGuildIds: available } });
             const message = await interaction.update(view);
             panelStore.set(moduleKey, {
                 message,
@@ -615,7 +442,7 @@ async function handleHomeInteraction({ interaction, config, client, logger, home
         }
 
         if (target === 'rainbow') {
-            const view = await buildRainbowBridgeView({
+            const view = await rainbowSetup.buildView({
                 config,
                 client,
                 guildOptions,
@@ -634,7 +461,7 @@ async function handleHomeInteraction({ interaction, config, client, logger, home
         }
 
         if (target === 'autobouncer') {
-            const view = await buildAutobouncerView({ config, client, mode: 'default', context: {} });
+            const view = await autobouncerSetup.buildView({ config, client, mode: 'default', context: {} });
             const message = await interaction.update(view);
             panelStore.set(moduleKey, { message, guildId: null, mode: 'default', context: {} });
             panelStore.set(homeKey, { message, guildOptions, view: 'module', module: 'autobouncer' });
