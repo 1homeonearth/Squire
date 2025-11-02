@@ -33,6 +33,90 @@ vi.mock('discord.js', async () => {
 import { WebhookClient } from 'discord.js';
 import { init, normalizeRainbowBridgeConfig, refresh } from '../src/features/rainbow-bridge/index.js';
 
+describe('normalizeRainbowBridgeConfig', () => {
+    it('normalizes per-server forms and derives active channels', () => {
+        const config = normalizeRainbowBridgeConfig({
+            forwardBots: false,
+            bridges: {
+                alpha: {
+                    name: 'Alpha',
+                    forms: {
+                        '123': {
+                            guildId: '123',
+                            channelId: 456,
+                            webhookUrl: 'https://discord.com/api/webhooks/111/token',
+                            name: 'Hallway'
+                        },
+                        '456': {
+                            channelId: '999'
+                        }
+                    }
+                }
+            }
+        });
+
+        expect(config.forwardBots).toBe(false);
+        const bridge = config.bridges.alpha;
+        expect(bridge.name).toBe('Alpha');
+        expect(bridge.forms['123']).toEqual({
+            guildId: '123',
+            channelId: '456',
+            threadId: null,
+            parentId: null,
+            webhookUrl: 'https://discord.com/api/webhooks/111/token',
+            name: 'Hallway'
+        });
+        expect(bridge.forms['456']).toEqual({
+            guildId: '456',
+            channelId: '999',
+            threadId: null,
+            parentId: null,
+            webhookUrl: null,
+            name: null
+        });
+        expect(bridge.channels).toEqual([
+            {
+                guildId: '123',
+                channelId: '456',
+                webhookUrl: 'https://discord.com/api/webhooks/111/token',
+                threadId: null,
+                parentId: null,
+                name: 'Hallway'
+            }
+        ]);
+    });
+
+    it('converts legacy channel arrays into form entries', () => {
+        const config = normalizeRainbowBridgeConfig({
+            bridges: {
+                beta: {
+                    channels: [
+                        {
+                            guildId: '789',
+                            channelId: '101',
+                            webhookUrl: 'https://discord.com/api/webhooks/222/tokenB'
+                        }
+                    ]
+                }
+            }
+        });
+
+        const bridge = config.bridges.beta;
+        expect(bridge.forms['789']).toEqual({
+            guildId: '789',
+            channelId: '101',
+            threadId: null,
+            parentId: null,
+            webhookUrl: 'https://discord.com/api/webhooks/222/tokenB',
+            name: null
+        });
+        expect(bridge.channels[0]).toMatchObject({
+            guildId: '789',
+            channelId: '101'
+        });
+    });
+});
+
 function makeMessage({
     channelId = 'chan-a',
     guildId = 'guild-1',

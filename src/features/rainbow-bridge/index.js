@@ -66,6 +66,21 @@ function normalizeChannelEntry(entry) {
     };
 }
 
+function normalizeBridgeFormEntry(entry, key) {
+    const base = entry && typeof entry === 'object' ? entry : {};
+    const guildId = base.guildId ? String(base.guildId) : (key ? String(key) : null);
+    if (!guildId) return null;
+    const form = {
+        guildId,
+        channelId: base.channelId ? String(base.channelId) : null,
+        threadId: base.threadId ? String(base.threadId) : null,
+        parentId: base.parentId ? String(base.parentId) : null,
+        webhookUrl: base.webhookUrl ? String(base.webhookUrl) : null,
+        name: base.name ? String(base.name) : null
+    };
+    return form;
+}
+
 export function normalizeRainbowBridgeConfig(value) {
     const base = value && typeof value === 'object' ? value : {};
     const forwardBots = base.forwardBots !== false;
@@ -76,10 +91,39 @@ export function normalizeRainbowBridgeConfig(value) {
     const bridges = {};
     for (const [bridgeId, rawEntry] of Object.entries(bridgesRaw)) {
         if (!bridgeId || !rawEntry || typeof rawEntry !== 'object') continue;
-        const channels = Array.isArray(rawEntry.channels) ? rawEntry.channels.map(normalizeChannelEntry).filter(Boolean) : [];
+        const forms = {};
+        const rawForms = rawEntry.forms && typeof rawEntry.forms === 'object'
+            ? rawEntry.forms
+            : {};
+
+        for (const [formKey, rawForm] of Object.entries(rawForms)) {
+            const normalizedForm = normalizeBridgeFormEntry(rawForm, formKey);
+            if (!normalizedForm) continue;
+            forms[normalizedForm.guildId] = normalizedForm;
+        }
+
+        if (Array.isArray(rawEntry.channels)) {
+            for (const channelEntry of rawEntry.channels) {
+                const normalizedChannel = normalizeChannelEntry(channelEntry);
+                if (!normalizedChannel) continue;
+                forms[normalizedChannel.guildId] = {
+                    guildId: normalizedChannel.guildId,
+                    channelId: normalizedChannel.channelId,
+                    threadId: normalizedChannel.threadId,
+                    parentId: normalizedChannel.parentId,
+                    webhookUrl: normalizedChannel.webhookUrl,
+                    name: normalizedChannel.name
+                };
+            }
+        }
+
+        const channels = Object.values(forms)
+            .map(normalizeChannelEntry)
+            .filter(Boolean);
         const entry = {
             name: rawEntry.name ? String(rawEntry.name) : String(bridgeId),
             forwardBots: rawEntry.forwardBots === undefined ? undefined : rawEntry.forwardBots !== false,
+            forms,
             channels
         };
         bridges[String(bridgeId)] = entry;

@@ -217,25 +217,23 @@ All configuration lives in `config.json`, which is materialised by `scripts/rend
   "bridges": {
     "main-halls": {
       "name": "Main Halls",
-      "channels": [
-        {
-          "guildId": "123456789012345678",
+      "forms": {
+        "123456789012345678": {
           "channelId": "234567890123456789",
           "webhookUrl": "https://discord.com/api/webhooks/..."
         },
-        {
-          "guildId": "987654321098765432",
+        "987654321098765432": {
           "channelId": "876543210987654321",
           "webhookUrl": "https://discord.com/api/webhooks/..."
         }
-      ]
+      }
     }
   }
 }
 ```
 
 - `forwardBots` controls whether bot-authored posts are mirrored globally; individual bridges can override this with their own `forwardBots` flag.
-- Each bridge lists the guild/channel pairs that should stay in sync. Provide the channel's webhook URL so Squire can speak in that channel.
+- Each bridge lists guild-specific form entries that capture the channel ID and webhook URL for that server. Provide the channel's webhook URL so Squire can speak in that channel. Any form missing required data is ignored until complete.
 - The Rainbow Bridge setup panel can automatically create webhooks when it has the **Manage Webhooks** permission, or you can paste an existing webhook URL.
 - Add at least two channels per bridge for syncing to begin. Edits and deletions propagate between every linked channel.
 
