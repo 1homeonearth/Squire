@@ -33,6 +33,7 @@
     "deleteMessageSeconds": 0,
     "scanBio": true
   },
+  "embedBuilder": {},
   "mainServerIds": "$ENV{MAIN_SERVER_IDS_JSON}",
   "welcome": "$ENV{WELCOME_CONFIG_JSON}"
 }
