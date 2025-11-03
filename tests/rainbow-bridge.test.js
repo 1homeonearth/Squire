@@ -162,7 +162,8 @@ describe('rainbow bridge refresh hook', () => {
             channels: {
                 cache: channelCache,
                 fetch: vi.fn(async (id) => channelCache.get(id) ?? null)
-            }
+            },
+            user: { id: 'bot-1' }
         };
         emit = async (event, ...args) => {
             const handlers = listeners.get(event) ?? [];
@@ -254,6 +255,76 @@ describe('rainbow bridge refresh hook', () => {
         const editPayload = bridgeWebhook.editMessage.mock.calls[0]?.[1] ?? {};
         const editDescription = editPayload.embeds?.[0]?.data?.description ?? editPayload.embeds?.[0]?.description ?? '';
         expect(editDescription).toContain('**Reactions:** 🔥 ×1');
+    });
+
+    it('mirrors emoji reactions across linked channels', async () => {
+        config.rainbowBridge.bridges.test = {
+            name: 'Reaction Bridge',
+            channels: [
+                { guildId: 'guild-1', channelId: 'chan-a', webhookUrl: 'https://discord.com/api/webhooks/111/tokenA' },
+                { guildId: 'guild-2', channelId: 'chan-b', webhookUrl: 'https://discord.com/api/webhooks/222/tokenB' }
+            ]
+        };
+        config.rainbowBridge = normalizeRainbowBridgeConfig(config.rainbowBridge);
+        refresh();
+
+        const targetMessage = {
+            id: null,
+            react: vi.fn(async () => {}),
+            reactions: { cache: new Map() }
+        };
+
+        const targetChannel = {
+            id: 'chan-b',
+            isTextBased: () => true,
+            messages: {
+                cache: new Map(),
+                fetch: vi.fn(async (id) => targetChannel.messages.cache.get(id) ?? null)
+            }
+        };
+        client.channels.cache.set('chan-b', targetChannel);
+
+        const originChannel = {
+            id: 'chan-a',
+            isTextBased: () => true,
+            messages: {
+                cache: new Map(),
+                fetch: vi.fn(async () => null)
+            }
+        };
+        client.channels.cache.set('chan-a', originChannel);
+
+        const source = makeMessage({ id: 'msg-react-target' });
+        originChannel.messages.cache.set(source.id, source);
+
+        await emit('messageCreate', source);
+
+        const bridgeWebhook = WebhookClient.instances.find(instance => instance.id === '222');
+        expect(bridgeWebhook).toBeTruthy();
+        const sendResult = await bridgeWebhook.send.mock.results[0]?.value;
+        expect(sendResult?.id).toBeTruthy();
+        targetMessage.id = sendResult.id;
+        targetChannel.messages.cache.set(targetMessage.id, targetMessage);
+
+        const reaction = {
+            message: source,
+            emoji: { id: null, name: '👍', toString: () => '👍' }
+        };
+
+        await emit('messageReactionAdd', reaction, { id: 'user-2' });
+
+        expect(targetMessage.react).toHaveBeenCalledTimes(1);
+        expect(targetMessage.react.mock.calls[0][0]).toBe('👍');
+
+        const removeStub = vi.fn(async () => {});
+        targetMessage.reactions.cache.set('thumbs', {
+            emoji: { id: null, name: '👍' },
+            users: { remove: removeStub }
+        });
+
+        await emit('messageReactionRemove', reaction, { id: 'user-2' });
+
+        expect(removeStub).toHaveBeenCalledWith('bot-1');
     });
 
     it('creates threads when mirroring into forum channels', async () => {
