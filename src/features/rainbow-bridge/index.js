@@ -327,24 +327,20 @@ function buildPresentation({ bridgeId, message }) {
     const headerLine = buildHeaderLine(message);
     const headerForContent = sanitizeMentions(headerLine);
 
-    const baseParts = [];
-    if (headerLine) baseParts.push(headerLine);
-    if (normalizedContent) baseParts.push(normalizedContent);
-    if (pollForEmbed) baseParts.push(pollForEmbed);
-    if (stickersForEmbed) baseParts.push(stickersForEmbed);
+    const embedParts = [];
+    if (normalizedContent) embedParts.push(normalizedContent);
+    if (pollForEmbed) embedParts.push(pollForEmbed);
+    if (stickersForEmbed) embedParts.push(stickersForEmbed);
 
     const viewLink = `[View message](https://discord.com/channels/${message.guildId}/${message.channelId}/${message.id})`;
-    const baseDescription = baseParts.join('\n\n').trim();
-    const spacer = baseDescription.length ? '\n\n' : '';
-    const maxBaseLength = Math.max(0, 4096 - viewLink.length - spacer.length);
-    const safeBase = baseDescription.length ? trunc(baseDescription, maxBaseLength) : '';
-    const combinedDescription = `${safeBase}${spacer}${viewLink}`.trim();
+    const embedDescription = embedParts.join('\n\n').trim();
+    const safeDescription = embedDescription.length ? trunc(embedDescription, 4096) : '';
 
     const embed = new EmbedBuilder()
         .setColor(nextColor(bridgeId));
 
-    if (combinedDescription.length) {
-        embed.setDescription(combinedDescription);
+    if (safeDescription.length) {
+        embed.setDescription(safeDescription);
     } else {
         embed.setDescription('\u200B');
     }
@@ -366,6 +362,7 @@ function buildPresentation({ bridgeId, message }) {
         normalizedContent,
         pollForContent,
         stickersForContent,
+        viewLink,
         attachmentUrls,
         media
     };
@@ -397,6 +394,7 @@ function prepareSendPayload({ message, bridgeId }) {
         if (presentation.pollForContent) parts.push(trunc(presentation.pollForContent, MAX_CONTENT_LENGTH));
         if (presentation.stickersForContent) parts.push(trunc(presentation.stickersForContent, MAX_CONTENT_LENGTH));
         if (presentation.attachmentUrls.length) parts.push(presentation.attachmentUrls.join('\n'));
+        if (presentation.viewLink) parts.push(trunc(presentation.viewLink, MAX_CONTENT_LENGTH));
         const payloadContent = trunc(parts.join('\n\n').trim(), MAX_CONTENT_LENGTH);
         if (payloadContent.length === 0 && !presentation.media.length) {
             return null;
@@ -410,6 +408,7 @@ function prepareSendPayload({ message, bridgeId }) {
         if (presentation.normalizedContent) contentParts.push(trunc(presentation.normalizedContent, MAX_CONTENT_LENGTH));
         if (presentation.pollForContent) contentParts.push(trunc(presentation.pollForContent, MAX_CONTENT_LENGTH));
         if (presentation.stickersForContent) contentParts.push(trunc(presentation.stickersForContent, MAX_CONTENT_LENGTH));
+        if (presentation.viewLink) contentParts.push(trunc(presentation.viewLink, MAX_CONTENT_LENGTH));
         if (contentParts.length) {
             payload.content = trunc(contentParts.join('\n\n'), MAX_CONTENT_LENGTH);
         }
@@ -432,6 +431,7 @@ function prepareEditPayload({ message, bridgeId }) {
         if (presentation.pollForContent) parts.push(trunc(presentation.pollForContent, MAX_CONTENT_LENGTH));
         if (presentation.stickersForContent) parts.push(trunc(presentation.stickersForContent, MAX_CONTENT_LENGTH));
         if (presentation.attachmentUrls.length) parts.push(presentation.attachmentUrls.join('\n'));
+        if (presentation.viewLink) parts.push(trunc(presentation.viewLink, MAX_CONTENT_LENGTH));
         const payloadContent = trunc(parts.join('\n\n').trim(), MAX_CONTENT_LENGTH);
         payload.content = payloadContent;
     } else {
@@ -440,6 +440,7 @@ function prepareEditPayload({ message, bridgeId }) {
         if (presentation.normalizedContent) contentParts.push(trunc(presentation.normalizedContent, MAX_CONTENT_LENGTH));
         if (presentation.pollForContent) contentParts.push(trunc(presentation.pollForContent, MAX_CONTENT_LENGTH));
         if (presentation.stickersForContent) contentParts.push(trunc(presentation.stickersForContent, MAX_CONTENT_LENGTH));
+        if (presentation.viewLink) contentParts.push(trunc(presentation.viewLink, MAX_CONTENT_LENGTH));
         payload.content = contentParts.length
             ? trunc(contentParts.join('\n\n'), MAX_CONTENT_LENGTH)
             : '';
