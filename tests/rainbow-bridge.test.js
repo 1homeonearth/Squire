@@ -15,7 +15,12 @@ vi.mock('discord.js', async () => {
             this.send = vi.fn(async (payload) => {
                 this.sent.push(payload);
                 MockWebhookClient.messageCounter += 1;
-                return { id: `mock-${this.id}-${MockWebhookClient.messageCounter}` };
+                const generatedThreadId = payload.threadId
+                    ?? (payload.threadName ? `mock-thread-${this.id}-${MockWebhookClient.messageCounter}` : null);
+                return {
+                    id: `mock-${this.id}-${MockWebhookClient.messageCounter}`,
+                    channelId: generatedThreadId
+                };
             });
             this.editMessage = vi.fn(async (messageId, payload) => {
                 this.edits.push({ messageId, payload });
@@ -30,7 +35,7 @@ vi.mock('discord.js', async () => {
     return { ...actual, WebhookClient: MockWebhookClient };
 });
 
-import { WebhookClient } from 'discord.js';
+import { WebhookClient, ChannelType, Collection } from 'discord.js';
 import { init, normalizeRainbowBridgeConfig, refresh } from '../src/features/rainbow-bridge/index.js';
 
 describe('normalizeRainbowBridgeConfig', () => {
@@ -147,11 +152,16 @@ describe('rainbow bridge refresh hook', () => {
 
     beforeEach(async () => {
         const listeners = new Map();
+        const channelCache = new Map();
         client = {
             on(event, handler) {
                 const existing = listeners.get(event) ?? [];
                 existing.push(handler);
                 listeners.set(event, existing);
+            },
+            channels: {
+                cache: channelCache,
+                fetch: vi.fn(async (id) => channelCache.get(id) ?? null)
             }
         };
         emit = async (event, ...args) => {
@@ -208,5 +218,142 @@ describe('rainbow bridge refresh hook', () => {
             content: 'Mirrored message'
         }));
         expect(targetWebhook.send).toHaveBeenCalledTimes(1);
+    });
+
+    it('includes reaction summaries and syncs edits when reactions change', async () => {
+        config.rainbowBridge.bridges.test = {
+            name: 'Test Bridge',
+            channels: [
+                { guildId: 'guild-1', channelId: 'chan-a', webhookUrl: 'https://discord.com/api/webhooks/111/tokenA' },
+                { guildId: 'guild-2', channelId: 'chan-b', webhookUrl: 'https://discord.com/api/webhooks/222/tokenB' }
+            ]
+        };
+        config.rainbowBridge = normalizeRainbowBridgeConfig(config.rainbowBridge);
+        refresh();
+
+        const source = makeMessage({ id: 'msg-react', content: 'React to me' });
+        source.reactions = {
+            cache: new Map([
+                ['fire', { count: 3, emoji: { toString: () => '🔥', name: 'fire' } }]
+            ])
+        };
+
+        await emit('messageCreate', source);
+
+        const bridgeWebhook = WebhookClient.instances.find(instance => instance.id === '222');
+        expect(bridgeWebhook).toBeTruthy();
+        const sendPayload = bridgeWebhook.send.mock.calls[0]?.[0] ?? {};
+        const description = sendPayload.embeds?.[0]?.data?.description ?? sendPayload.embeds?.[0]?.description ?? '';
+        expect(description).toContain('**Reactions:** 🔥 ×3');
+        expect(description).not.toContain('View message');
+
+        source.reactions.cache.set('fire', { count: 1, emoji: { toString: () => '🔥', name: 'fire' } });
+        await emit('messageReactionRemove', { message: source });
+
+        expect(bridgeWebhook.editMessage).toHaveBeenCalledTimes(1);
+        const editPayload = bridgeWebhook.editMessage.mock.calls[0]?.[1] ?? {};
+        const editDescription = editPayload.embeds?.[0]?.data?.description ?? editPayload.embeds?.[0]?.description ?? '';
+        expect(editDescription).toContain('**Reactions:** 🔥 ×1');
+    });
+
+    it('creates threads when mirroring into forum channels', async () => {
+        client.channels.cache.set('forum-1', { id: 'forum-1', type: ChannelType.GuildForum });
+        config.rainbowBridge.bridges.test = {
+            name: 'Forum Bridge',
+            channels: [
+                {
+                    guildId: 'guild-1',
+                    channelId: 'thread-origin',
+                    threadId: 'thread-origin',
+                    parentId: 'forum-origin',
+                    webhookUrl: 'https://discord.com/api/webhooks/111/tokenA'
+                },
+                {
+                    guildId: 'guild-2',
+                    channelId: 'forum-1',
+                    parentId: 'forum-1',
+                    webhookUrl: 'https://discord.com/api/webhooks/222/tokenB'
+                }
+            ]
+        };
+        config.rainbowBridge = normalizeRainbowBridgeConfig(config.rainbowBridge);
+        refresh();
+
+        const threadChannel = {
+            id: 'thread-origin',
+            name: 'Origin Thread',
+            parentId: 'forum-origin',
+            parent: { id: 'forum-origin' },
+            isThread: () => true
+        };
+
+        const baseMessage = makeMessage({ id: 'thread-msg', channelId: 'thread-origin' });
+        baseMessage.channel = threadChannel;
+
+        await emit('messageCreate', baseMessage);
+
+        const targetWebhook = WebhookClient.instances.find(instance => instance.id === '222');
+        expect(targetWebhook).toBeTruthy();
+        const firstPayload = targetWebhook.send.mock.calls[0]?.[0] ?? {};
+        expect(firstPayload.threadName).toBe('Origin Thread');
+
+        const secondMessage = makeMessage({ id: 'thread-msg-2', channelId: 'thread-origin' });
+        secondMessage.channel = threadChannel;
+        await emit('messageCreate', secondMessage);
+
+        const secondPayload = targetWebhook.send.mock.calls[1]?.[0] ?? {};
+        expect(secondPayload.threadId).toMatch(/^mock-thread-222-/);
+    });
+
+    it('purges recent messages via slash command and reports success', async () => {
+        config.rainbowBridge.bridges.test = {
+            name: 'Cleanup',
+            channels: [
+                { guildId: 'guild-1', channelId: 'chan-a', webhookUrl: 'https://discord.com/api/webhooks/111/tokenA' },
+                { guildId: 'guild-2', channelId: 'chan-b', webhookUrl: 'https://discord.com/api/webhooks/222/tokenB' }
+            ]
+        };
+        config.rainbowBridge = normalizeRainbowBridgeConfig(config.rainbowBridge);
+        refresh();
+
+        const channelMessages = new Collection([
+            ['m1', { id: 'm1', deletable: true }],
+            ['m2', { id: 'm2', deletable: true }],
+            ['m3', { id: 'm3', deletable: true }]
+        ]);
+
+        const bulkDelete = vi.fn(async (messages) => {
+            const items = Array.isArray(messages) ? messages : [];
+            return new Collection(items.map(msg => [msg.id ?? msg, msg]));
+        });
+
+        const interaction = {
+            commandName: 'bridgepurge',
+            isChatInputCommand: () => true,
+            inGuild: () => true,
+            guildId: 'guild-1',
+            memberPermissions: { has: () => true },
+            options: { getInteger: () => 3 },
+            channel: {
+                id: 'chan-a',
+                type: ChannelType.GuildText,
+                isTextBased: () => true,
+                messages: {
+                    fetch: vi.fn(async () => channelMessages)
+                },
+                bulkDelete
+            },
+            reply: vi.fn(async () => {}),
+            deferReply: vi.fn(async () => {}),
+            editReply: vi.fn(async () => {})
+        };
+
+        await emit('interactionCreate', interaction);
+
+        expect(interaction.deferReply).toHaveBeenCalledTimes(1);
+        expect(bulkDelete).toHaveBeenCalledTimes(1);
+        const deleteArgs = bulkDelete.mock.calls[0]?.[0] ?? [];
+        expect(deleteArgs).toHaveLength(3);
+        expect(interaction.editReply).toHaveBeenCalledTimes(1);
     });
 });

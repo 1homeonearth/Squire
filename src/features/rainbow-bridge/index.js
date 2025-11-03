@@ -3,7 +3,10 @@
 
 import {
     WebhookClient,
-    EmbedBuilder
+    EmbedBuilder,
+    SlashCommandBuilder,
+    PermissionFlagsBits,
+    ChannelType
 } from 'discord.js';
 import { isYouTubeUrl, prepareForNativeEmbed } from '../../lib/youtube.js';
 import { formatPollLines } from '../../lib/poll-format.js';
@@ -59,8 +62,29 @@ const runtime = {
     knownWebhookIds: new Set(),
     webhookCache: new Map(),
     messageLinks: new Map(),
-    dirty: true
+    dirty: true,
+    client: null,
+    mirroredMessageIds: new Set(),
+    threadMirrors: new Map()
 };
+
+const MAX_THREAD_NAME_LENGTH = 100;
+
+export const commands = [
+    new SlashCommandBuilder()
+    .setName('bridgepurge')
+    .setDescription('Delete recent messages in this bridge and mirror the deletions across linked channels.')
+    .setDefaultMemberPermissions(PermissionFlagsBits.ManageMessages)
+    .setDMPermission(false)
+    .addIntegerOption(opt =>
+        opt
+        .setName('count')
+        .setDescription('Number of recent messages to delete (1-200).')
+        .setRequired(true)
+        .setMinValue(1)
+        .setMaxValue(200)
+    )
+];
 
 function parseWebhookUrl(url) {
     if (typeof url !== 'string') return null;
@@ -298,6 +322,108 @@ function extractMedia(message) {
     return [...new Set(urls)];
 }
 
+function formatReactionSummary(message) {
+    const cache = message?.reactions?.cache ?? message?.reactions ?? null;
+    if (!cache || typeof cache.size !== 'number' || cache.size === 0) {
+        return '';
+    }
+    const list = Array.from(cache.values?.() ?? cache.values() ?? []);
+    const parts = [];
+    for (const entry of list) {
+        if (!entry) continue;
+        const count = Number(entry.count ?? 0);
+        if (!Number.isFinite(count) || count <= 0) continue;
+        const emoji = entry.emoji?.toString?.() ?? entry.emoji?.name ?? '';
+        if (!emoji) continue;
+        parts.push(`${emoji} ×${count}`);
+    }
+    if (!parts.length) {
+        return '';
+    }
+    const summary = parts.join(' • ');
+    return `**Reactions:** ${summary}`;
+}
+
+function sanitizeThreadName(name, fallback) {
+    const base = typeof name === 'string' && name.trim().length
+        ? name.trim()
+        : (fallback ?? 'Thread');
+    return base.length > MAX_THREAD_NAME_LENGTH
+        ? `${base.slice(0, MAX_THREAD_NAME_LENGTH - 1)}…`
+        : base;
+}
+
+function rememberThreadMapping({ bridgeId, originThreadId, targetChannelId, targetThreadId }) {
+    if (!bridgeId || !originThreadId || !targetChannelId || !targetThreadId) return;
+    const key = `${bridgeId}:${originThreadId}`;
+    if (!runtime.threadMirrors.has(key)) {
+        runtime.threadMirrors.set(key, new Map());
+    }
+    const mapping = runtime.threadMirrors.get(key);
+    mapping.set(targetChannelId, targetThreadId);
+}
+
+function resolveThreadMapping({ bridgeId, originThreadId, targetChannelId }) {
+    if (!bridgeId || !originThreadId || !targetChannelId) return null;
+    const key = `${bridgeId}:${originThreadId}`;
+    const mapping = runtime.threadMirrors.get(key);
+    if (!mapping) return null;
+    return mapping.get(targetChannelId) ?? null;
+}
+
+async function fetchChannelSafe(id) {
+    if (!id) return null;
+    const client = runtime.client;
+    if (!client) return null;
+    const cached = client.channels?.cache?.get?.(id) ?? null;
+    if (cached) return cached;
+    if (typeof client.channels?.fetch !== 'function') return null;
+    try {
+        return await client.channels.fetch(id);
+    } catch {
+        return null;
+    }
+}
+
+function isThreadChannel(channel) {
+    return typeof channel?.isThread === 'function' && channel.isThread();
+}
+
+async function resolveThreadOptions({ bridgeId, target, message, originThreadId }) {
+    const options = { threadId: target.threadId ?? null, threadName: null };
+    if (!originThreadId) {
+        return options;
+    }
+
+    if (options.threadId) {
+        return options;
+    }
+
+    const mapped = resolveThreadMapping({ bridgeId, originThreadId, targetChannelId: target.channelId });
+    if (mapped) {
+        options.threadId = mapped;
+        return options;
+    }
+
+    const channel = await fetchChannelSafe(target.channelId);
+    if (!channel) {
+        return options;
+    }
+
+    if (channel.type === ChannelType.GuildForum) {
+        const originChannel = message?.channel ?? null;
+        const originName = originChannel?.name ?? message?.thread?.name ?? `Thread ${originThreadId}`;
+        options.threadName = sanitizeThreadName(originName, `Thread ${originThreadId}`);
+        return options;
+    }
+
+    if (isThreadChannel(channel)) {
+        options.threadId = channel.id;
+    }
+
+    return options;
+}
+
 function buildHeaderLine(message) {
     const guildName = message.guild?.name ?? message.guildId ?? 'Unknown server';
     const channelLabel = formatChannelLabel(message.channel, message.channelId);
@@ -331,19 +457,18 @@ function buildPresentation({ bridgeId, message }) {
         .map(att => att?.url)
         .filter(Boolean);
 
-    const viewLink = `[View message](https://discord.com/channels/${message.guildId}/${message.channelId}/${message.id})`;
-
     const attachmentsForEmbed = attachmentUrls.length
         ? sanitizeMentions(trunc(attachmentUrls.join('\n'), 1024))
         : '';
-    const viewLinkForEmbed = viewLink ? sanitizeMentions(trunc(viewLink, 1024)) : '';
+    const reactionSummary = formatReactionSummary(message);
+    const reactionsForEmbed = reactionSummary ? sanitizeMentions(trunc(reactionSummary, 512)) : '';
 
     const embedParts = [];
     if (normalizedContent) embedParts.push(normalizedContent);
     if (pollForEmbed) embedParts.push(pollForEmbed);
     if (stickersForEmbed) embedParts.push(stickersForEmbed);
     if (attachmentsForEmbed) embedParts.push(attachmentsForEmbed);
-    if (viewLinkForEmbed) embedParts.push(viewLinkForEmbed);
+    if (reactionsForEmbed) embedParts.push(reactionsForEmbed);
 
     const embedDescription = embedParts.join('\n\n').trim();
     const safeDescription = embedDescription.length ? trunc(embedDescription, 4096) : '';
@@ -370,7 +495,6 @@ function buildPresentation({ bridgeId, message }) {
         normalizedContent,
         pollForContent,
         stickersForContent,
-        viewLink,
         attachmentUrls,
         media
     };
@@ -432,8 +556,11 @@ function prepareEditPayload({ message, bridgeId }) {
 export async function init({ client, config, logger }) {
     runtime.config = config;
     runtime.logger = logger;
+    runtime.client = client;
     runtime.webhookCache = new Map();
     runtime.messageLinks = new Map();
+    runtime.mirroredMessageIds = new Set();
+    runtime.threadMirrors = new Map();
     runtime.dirty = true;
 
     config.rainbowBridge = normalizeRainbowBridgeConfig(config.rainbowBridge);
@@ -454,17 +581,34 @@ export async function init({ client, config, logger }) {
         return runtime.webhookCache.get(key);
     }
 
-    function cacheForwardedMessage({ originalId, bridgeId, originChannelId, originParentId, targetChannelId, targetMessageId, targetThreadId }) {
+    function cacheForwardedMessage({
+        originalId,
+        bridgeId,
+        originChannelId,
+        originParentId,
+        originThreadId,
+        targetChannelId,
+        targetMessageId,
+        targetThreadId
+    }) {
         if (!runtime.messageLinks.has(originalId)) {
             runtime.messageLinks.set(originalId, new Map());
         }
         const bridgeMap = runtime.messageLinks.get(originalId);
         if (!bridgeMap.has(bridgeId)) {
-            bridgeMap.set(bridgeId, { originChannelId, originParentId: originParentId ?? null, forwarded: new Map() });
+            bridgeMap.set(bridgeId, {
+                originChannelId,
+                originParentId: originParentId ?? null,
+                originThreadId: originThreadId ?? null,
+                forwarded: new Map()
+            });
         }
         const record = bridgeMap.get(bridgeId);
         if (originParentId && !record.originParentId) {
             record.originParentId = originParentId;
+        }
+        if (originThreadId && !record.originThreadId) {
+            record.originThreadId = originThreadId;
         }
         const key = targetThreadId ?? targetChannelId;
         record.forwarded.set(key, {
@@ -472,6 +616,18 @@ export async function init({ client, config, logger }) {
             channelId: targetChannelId,
             threadId: targetThreadId ?? null
         });
+
+        if (targetMessageId) {
+            runtime.mirroredMessageIds.add(targetMessageId);
+        }
+        if (originThreadId && targetThreadId) {
+            rememberThreadMapping({
+                bridgeId,
+                originThreadId,
+                targetChannelId,
+                targetThreadId
+            });
+        }
     }
 
     function collectBridgeEntries(message, channelLookup) {
@@ -531,7 +687,9 @@ export async function init({ client, config, logger }) {
             if (!bridgesForChannel || !bridgesForChannel.length) return;
 
             const originIds = new Set();
-            if (message.channel?.id) originIds.add(message.channel.id);
+            const originChannelId = message.channel?.id ?? message.channelId;
+            if (originChannelId) originIds.add(originChannelId);
+            const originThreadId = isThreadChannel(message.channel) ? message.channel.id : null;
             const parentId = message.channel?.parentId ?? message.channel?.parent?.id ?? null;
             if (parentId) originIds.add(parentId);
 
@@ -553,18 +711,30 @@ export async function init({ client, config, logger }) {
                 for (const target of targets) {
                     try {
                         const webhook = getWebhookClient(target);
-                        const sendPayload = target.threadId
-                            ? { ...payload, threadId: target.threadId }
-                            : payload;
+                        const threadOptions = await resolveThreadOptions({
+                            bridgeId,
+                            target,
+                            message,
+                            originThreadId
+                        });
+                        const sendPayload = { ...payload };
+                        if (threadOptions.threadId) {
+                            sendPayload.threadId = threadOptions.threadId;
+                        }
+                        if (threadOptions.threadName) {
+                            sendPayload.threadName = threadOptions.threadName;
+                        }
                         const sent = await webhook.send(sendPayload);
+                        const responseThreadId = sent?.channelId ?? sent?.channel?.id ?? threadOptions.threadId ?? target.threadId ?? null;
                         cacheForwardedMessage({
                             originalId: message.id,
                             bridgeId,
-                            originChannelId: message.channel.id,
+                            originChannelId,
                             originParentId: parentId ?? null,
+                            originThreadId,
                             targetChannelId: target.channelId,
                             targetMessageId: sent?.id ?? null,
-                            targetThreadId: target.threadId ?? null
+                            targetThreadId: responseThreadId
                         });
                     } catch (err) {
                         logger?.warn?.(`[rainbow-bridge] Failed to forward message ${message.id} to ${target.channelId}: ${err?.message ?? err}`);
@@ -576,99 +746,239 @@ export async function init({ client, config, logger }) {
         }
     }
 
+    async function syncForwardedMessage(message) {
+        if (!message?.id) return;
+        if (runtime.mirroredMessageIds.has(message.id)) return;
+        if (!runtime.messageLinks.has(message.id)) return;
+
+        const { bridges } = getActiveState();
+        const bridgeMap = runtime.messageLinks.get(message.id);
+        for (const [bridgeId, record] of bridgeMap.entries()) {
+            const bridge = bridges.get(bridgeId);
+            if (!bridge) continue;
+            const originIds = new Set();
+            if (record.originChannelId) originIds.add(record.originChannelId);
+            if (record.originParentId) originIds.add(record.originParentId);
+            if (record.originThreadId) originIds.add(record.originThreadId);
+            const targets = bridge.channels.filter((ch) => {
+                const matchIds = ch.matchIds ?? new Set([ch.channelId]);
+                for (const id of matchIds) {
+                    if (originIds.has(id)) return false;
+                }
+                return true;
+            });
+            const payload = prepareEditPayload({ message, bridgeId });
+
+            for (const target of targets) {
+                const forwarded = getForwardedRecord(record, target);
+                const targetMessageId = forwarded?.messageId ?? null;
+                if (!targetMessageId) continue;
+                const threadId = forwarded?.threadId ?? target.threadId ?? null;
+                try {
+                    const webhook = getWebhookClient(target);
+                    const editPayload = threadId ? { ...payload, threadId } : payload;
+                    await webhook.editMessage(targetMessageId, editPayload);
+                } catch (err) {
+                    logger?.warn?.(`[rainbow-bridge] Failed to edit mirrored message ${targetMessageId} in ${target.channelId}: ${err?.message ?? err}`);
+                }
+            }
+        }
+    }
+
     async function handleMessageUpdate(oldMessage, newMessage) {
         try {
             const message = newMessage?.partial ? await newMessage.fetch().catch(() => null) : newMessage;
             if (!message) return;
-            if (!runtime.messageLinks.has(message.id)) return;
-
-            const { bridges } = getActiveState();
-            const bridgeMap = runtime.messageLinks.get(message.id);
-            for (const [bridgeId, record] of bridgeMap.entries()) {
-                const bridge = bridges.get(bridgeId);
-                if (!bridge) continue;
-                const originIds = new Set();
-                if (record.originChannelId) originIds.add(record.originChannelId);
-                if (record.originParentId) originIds.add(record.originParentId);
-                const targets = bridge.channels.filter((ch) => {
-                    const matchIds = ch.matchIds ?? new Set([ch.channelId]);
-                    for (const id of matchIds) {
-                        if (originIds.has(id)) return false;
-                    }
-                    return true;
-                });
-                const payload = prepareEditPayload({ message, bridgeId });
-
-                for (const target of targets) {
-                    const forwarded = getForwardedRecord(record, target);
-                    const targetMessageId = forwarded?.messageId ?? null;
-                    if (!targetMessageId) continue;
-                    const threadId = forwarded?.threadId ?? target.threadId ?? null;
-                    try {
-                        const webhook = getWebhookClient(target);
-                        const editPayload = threadId ? { ...payload, threadId } : payload;
-                        await webhook.editMessage(targetMessageId, editPayload);
-                    } catch (err) {
-                        logger?.warn?.(`[rainbow-bridge] Failed to edit mirrored message ${targetMessageId} in ${target.channelId}: ${err?.message ?? err}`);
-                    }
-                }
-            }
+            await syncForwardedMessage(message);
         } catch (err) {
             logger?.error?.(`[rainbow-bridge] messageUpdate error: ${err?.message ?? err}`);
         }
     }
 
-    async function handleMessageDelete(message) {
-        try {
-            const { knownWebhookIds, bridges } = getActiveState();
-            if (message.webhookId && knownWebhookIds.has(message.webhookId)) {
-                return; // ignore deletions of mirrored messages to avoid loops
-            }
-            const messageId = message.id ?? message?.message?.id;
-            if (!messageId) return;
-            if (!runtime.messageLinks.has(messageId)) return;
+    async function mirrorDeletionForMessage(message) {
+        const { knownWebhookIds, bridges } = getActiveState();
+        const messageId = message?.id ?? message?.message?.id ?? message;
+        if (!messageId) return;
+        const webhookId = message?.webhookId ?? message?.message?.webhookId ?? null;
+        if (webhookId && knownWebhookIds.has(webhookId)) {
+            return;
+        }
+        if (!runtime.messageLinks.has(messageId)) return;
 
-            const bridgeMap = runtime.messageLinks.get(messageId);
-            runtime.messageLinks.delete(messageId);
+        const bridgeMap = runtime.messageLinks.get(messageId);
+        runtime.messageLinks.delete(messageId);
 
-            for (const [bridgeId, record] of bridgeMap.entries()) {
-                const bridge = bridges.get(bridgeId);
-                if (!bridge) continue;
-                const originIds = new Set();
-                if (record.originChannelId) originIds.add(record.originChannelId);
-                if (record.originParentId) originIds.add(record.originParentId);
-                const targets = bridge.channels.filter((ch) => {
-                    const matchIds = ch.matchIds ?? new Set([ch.channelId]);
-                    for (const id of matchIds) {
-                        if (originIds.has(id)) return false;
+        for (const [bridgeId, record] of bridgeMap.entries()) {
+            const bridge = bridges.get(bridgeId);
+            if (!bridge) continue;
+            const originIds = new Set();
+            if (record.originChannelId) originIds.add(record.originChannelId);
+            if (record.originParentId) originIds.add(record.originParentId);
+            if (record.originThreadId) originIds.add(record.originThreadId);
+            const targets = bridge.channels.filter((ch) => {
+                const matchIds = ch.matchIds ?? new Set([ch.channelId]);
+                for (const id of matchIds) {
+                    if (originIds.has(id)) return false;
+                }
+                return true;
+            });
+            for (const target of targets) {
+                const forwarded = getForwardedRecord(record, target);
+                const targetMessageId = forwarded?.messageId ?? null;
+                if (!targetMessageId) continue;
+                runtime.mirroredMessageIds.delete(targetMessageId);
+                const threadId = forwarded?.threadId ?? target.threadId ?? null;
+                try {
+                    const webhook = getWebhookClient(target);
+                    if (threadId) {
+                        await webhook.deleteMessage(targetMessageId, threadId).catch(() => {});
+                    } else {
+                        await webhook.deleteMessage(targetMessageId).catch(() => {});
                     }
-                    return true;
-                });
-                for (const target of targets) {
-                    const forwarded = getForwardedRecord(record, target);
-                    const targetMessageId = forwarded?.messageId ?? null;
-                    if (!targetMessageId) continue;
-                    const threadId = forwarded?.threadId ?? target.threadId ?? null;
-                    try {
-                        const webhook = getWebhookClient(target);
-                        if (threadId) {
-                            await webhook.deleteMessage(targetMessageId, threadId).catch(() => {});
-                        } else {
-                            await webhook.deleteMessage(targetMessageId).catch(() => {});
-                        }
-                    } catch (err) {
-                        logger?.warn?.(`[rainbow-bridge] Failed to delete mirrored message ${targetMessageId} in ${target.channelId}: ${err?.message ?? err}`);
-                    }
+                } catch (err) {
+                    logger?.warn?.(`[rainbow-bridge] Failed to delete mirrored message ${targetMessageId} in ${target.channelId}: ${err?.message ?? err}`);
                 }
             }
+        }
+    }
+
+    async function handleMessageDelete(message) {
+        try {
+            await mirrorDeletionForMessage(message);
         } catch (err) {
             logger?.error?.(`[rainbow-bridge] messageDelete error: ${err?.message ?? err}`);
+        }
+    }
+
+    async function handleMessageDeleteBulk(messages) {
+        try {
+            const list = Array.isArray(messages) ? messages : messages?.values?.();
+            if (!list) return;
+            for (const msg of list) {
+                await mirrorDeletionForMessage(msg);
+            }
+        } catch (err) {
+            logger?.error?.(`[rainbow-bridge] messageDeleteBulk error: ${err?.message ?? err}`);
+        }
+    }
+
+    async function handleReactionUpdate(reaction) {
+        try {
+            const partialMessage = reaction?.message ?? null;
+            const message = partialMessage?.partial
+                ? await partialMessage.fetch().catch(() => null)
+                : partialMessage;
+            if (!message) return;
+            await syncForwardedMessage(message);
+        } catch (err) {
+            logger?.error?.(`[rainbow-bridge] messageReaction error: ${err?.message ?? err}`);
+        }
+    }
+
+    async function handleBridgePurge(interaction) {
+        if (!interaction.inGuild?.() && !interaction.guildId) {
+            await interaction.reply({ content: 'Run this command inside a server channel.', ephemeral: true }).catch(() => {});
+            return;
+        }
+        if (!interaction.memberPermissions?.has(PermissionFlagsBits.ManageMessages)) {
+            await interaction.reply({ content: 'You need **Manage Messages** permission to do that.', ephemeral: true }).catch(() => {});
+            return;
+        }
+
+        const channel = interaction.channel ?? null;
+        if (!channel || typeof channel.isTextBased !== 'function' || !channel.isTextBased()) {
+            await interaction.reply({ content: 'This command can only run in text-based channels.', ephemeral: true }).catch(() => {});
+            return;
+        }
+        if (channel.type === ChannelType.GuildForum) {
+            await interaction.reply({ content: 'Use this command inside a specific post thread, not the forum list.', ephemeral: true }).catch(() => {});
+            return;
+        }
+
+        const count = interaction.options?.getInteger?.('count', true) ?? 0;
+        if (!Number.isInteger(count) || count < 1 || count > 200) {
+            await interaction.reply({ content: 'Provide a number between 1 and 200.', ephemeral: true }).catch(() => {});
+            return;
+        }
+
+        const { channelLookup } = getActiveState();
+        const matching = new Set();
+        if (channel.id) {
+            const direct = channelLookup.get(channel.id) ?? [];
+            for (const entry of direct) matching.add(entry.bridgeId);
+        }
+        const parentId = channel.parentId ?? channel.parent?.id ?? null;
+        if (parentId) {
+            const parentEntries = channelLookup.get(parentId) ?? [];
+            for (const entry of parentEntries) matching.add(entry.bridgeId);
+        }
+        if (!matching.size) {
+            await interaction.reply({ content: 'This channel is not part of any Rainbow Bridge links.', ephemeral: true }).catch(() => {});
+            return;
+        }
+
+        await interaction.deferReply({ ephemeral: true }).catch(() => {});
+
+        const messagesToDelete = new Map();
+        let remaining = count;
+        let before = null;
+        while (remaining > 0) {
+            const fetchLimit = Math.min(remaining, 100);
+            if (typeof channel.messages?.fetch !== 'function') break;
+            const fetched = await channel.messages.fetch({ limit: fetchLimit, ...(before ? { before } : {}) }).catch(() => null);
+            if (!fetched?.size) break;
+            for (const [id, msg] of fetched) {
+                if (!messagesToDelete.has(id)) {
+                    messagesToDelete.set(id, msg);
+                }
+            }
+            remaining -= fetched.size;
+            const last = fetched.last();
+            before = last?.id ?? null;
+            if (!before) break;
+        }
+
+        const deletable = [];
+        for (const message of messagesToDelete.values()) {
+            if (message?.deletable === false) continue;
+            deletable.push(message);
+        }
+
+        if (!deletable.length) {
+            await interaction.editReply({ content: 'No deletable messages were found in the requested range.' }).catch(() => {});
+            return;
+        }
+
+        try {
+            const deleted = await channel.bulkDelete(deletable, true);
+            const total = deleted?.size ?? 0;
+            await interaction.editReply({
+                content: total
+                    ? `Deleted ${total} message${total === 1 ? '' : 's'} and mirrored the removals across linked channels.`
+                    : 'No messages were deleted (they may be older than 14 days).'
+            }).catch(() => {});
+        } catch (err) {
+            await interaction.editReply({ content: `Failed to delete messages: ${err?.message ?? err}` }).catch(() => {});
         }
     }
 
     client.on('messageCreate', handleMessageCreate);
     client.on('messageUpdate', handleMessageUpdate);
     client.on('messageDelete', handleMessageDelete);
+    client.on('messageDeleteBulk', handleMessageDeleteBulk);
+    client.on('messageReactionAdd', handleReactionUpdate);
+    client.on('messageReactionRemove', handleReactionUpdate);
+    client.on('messageReactionRemoveAll', async (message) => {
+        await syncForwardedMessage(message);
+    });
+    client.on('messageReactionRemoveEmoji', async (reaction) => {
+        await handleReactionUpdate(reaction);
+    });
+    client.on('interactionCreate', async (interaction) => {
+        if (!interaction?.isChatInputCommand?.()) return;
+        if (interaction.commandName !== 'bridgepurge') return;
+        await handleBridgePurge(interaction);
+    });
 
     const { bridges, channelLookup } = getActiveState();
     if (bridges.size) {
