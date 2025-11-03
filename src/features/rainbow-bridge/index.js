@@ -8,6 +8,7 @@ import {
     PermissionFlagsBits,
     ChannelType
 } from 'discord.js';
+import { ensureCollection } from '../../core/db.js';
 import { isYouTubeUrl, prepareForNativeEmbed } from '../../lib/youtube.js';
 import { formatPollLines } from '../../lib/poll-format.js';
 
@@ -54,6 +55,9 @@ function nextColorGen() {
 
 const nextColor = nextColorGen();
 
+const LINK_COLLECTION_NAME = 'rainbow_bridge_links';
+const DELETE_SUPPRESS_TIMEOUT = 30_000;
+
 const runtime = {
     config: null,
     logger: null,
@@ -62,10 +66,14 @@ const runtime = {
     knownWebhookIds: new Set(),
     webhookCache: new Map(),
     messageLinks: new Map(),
+    reverseMessageLinks: new Map(),
     dirty: true,
     client: null,
     mirroredMessageIds: new Set(),
-    threadMirrors: new Map()
+    threadMirrors: new Map(),
+    db: null,
+    linkCollection: null,
+    suppressedDeletes: new Set()
 };
 
 const MAX_THREAD_NAME_LENGTH = 100;
@@ -181,6 +189,132 @@ export function normalizeRainbowBridgeConfig(value) {
     };
 }
 
+function getLinkCollection() {
+    if (!runtime.db) return null;
+    if (!runtime.linkCollection) {
+        runtime.linkCollection = ensureCollection(runtime.db, LINK_COLLECTION_NAME, { indices: ['originalId', 'bridgeId'] });
+    }
+    return runtime.linkCollection;
+}
+
+function suppressDeletion(messageId) {
+    if (!messageId) return;
+    runtime.suppressedDeletes.add(messageId);
+    setTimeout(() => runtime.suppressedDeletes.delete(messageId), DELETE_SUPPRESS_TIMEOUT).unref?.();
+}
+
+function cleanupForwardMappings(originalId, bridgeId, record) {
+    if (!record) return;
+    const forwardedValues = record.forwarded instanceof Map
+        ? Array.from(record.forwarded.values())
+        : [];
+    for (const entry of forwardedValues) {
+        const targetId = entry?.messageId ?? null;
+        if (!targetId) continue;
+        runtime.mirroredMessageIds.delete(targetId);
+        runtime.reverseMessageLinks.delete(targetId);
+    }
+    const collection = getLinkCollection();
+    if (collection) {
+        const existing = collection.findOne({ originalId, bridgeId });
+        if (existing) {
+            collection.remove(existing);
+        }
+    }
+}
+
+function persistLinkRecord(originalId, bridgeId, record) {
+    const collection = getLinkCollection();
+    if (!collection || !originalId || !bridgeId || !record) return;
+
+    const forwarded = [];
+    if (record.forwarded instanceof Map) {
+        for (const value of record.forwarded.values()) {
+            if (!value?.messageId || !value?.channelId) continue;
+            forwarded.push({
+                messageId: value.messageId,
+                channelId: value.channelId,
+                threadId: value.threadId ?? null
+            });
+        }
+    }
+
+    let doc = collection.findOne({ originalId, bridgeId });
+    if (!doc) {
+        doc = collection.insert({
+            originalId,
+            bridgeId,
+            originChannelId: record.originChannelId ?? null,
+            originParentId: record.originParentId ?? null,
+            originThreadId: record.originThreadId ?? null,
+            forwarded
+        });
+        return doc;
+    }
+
+    doc.originChannelId = record.originChannelId ?? null;
+    doc.originParentId = record.originParentId ?? null;
+    doc.originThreadId = record.originThreadId ?? null;
+    doc.forwarded = forwarded;
+    collection.update(doc);
+    return doc;
+}
+
+function hydratePersistedLinks() {
+    const collection = getLinkCollection();
+    if (!collection) return;
+    const docs = collection.find() ?? [];
+    for (const doc of docs) {
+        const originalId = doc?.originalId ? String(doc.originalId) : null;
+        const bridgeId = doc?.bridgeId ? String(doc.bridgeId) : null;
+        if (!originalId || !bridgeId) continue;
+
+        if (!runtime.messageLinks.has(originalId)) {
+            runtime.messageLinks.set(originalId, new Map());
+        }
+        const forwarded = new Map();
+        const list = Array.isArray(doc.forwarded) ? doc.forwarded : [];
+        for (const entry of list) {
+            const messageId = entry?.messageId ? String(entry.messageId) : null;
+            const channelId = entry?.channelId ? String(entry.channelId) : null;
+            const threadId = entry?.threadId ? String(entry.threadId) : null;
+            if (!messageId || !channelId) continue;
+            const key = threadId ?? channelId;
+            forwarded.set(key, {
+                messageId,
+                channelId,
+                threadId: threadId ?? null
+            });
+            runtime.mirroredMessageIds.add(messageId);
+            runtime.reverseMessageLinks.set(messageId, {
+                originalId,
+                bridgeId,
+                channelId,
+                threadId: threadId ?? null
+            });
+        }
+        const record = {
+            originChannelId: doc?.originChannelId ? String(doc.originChannelId) : null,
+            originParentId: doc?.originParentId ? String(doc.originParentId) : null,
+            originThreadId: doc?.originThreadId ? String(doc.originThreadId) : null,
+            forwarded
+        };
+        runtime.messageLinks.get(originalId).set(bridgeId, record);
+
+        if (record.originThreadId && forwarded.size) {
+            for (const value of forwarded.values()) {
+                if (!value?.threadId) continue;
+                rememberThreadMapping({
+                    bridgeId,
+                    originThreadId: record.originThreadId,
+                    targetChannelId: value.channelId,
+                    targetThreadId: value.threadId
+                });
+            }
+        }
+    }
+}
+
 function buildChannelLookup(bridges) {
     const channelMap = new Map();
     for (const [bridgeId, bridge] of bridges.entries()) {
@@ -265,8 +399,10 @@ function rebuildState() {
     runtime.dirty = false;
 
     for (const [messageId, bridgeMap] of runtime.messageLinks.entries()) {
-        for (const bridgeId of bridgeMap.keys()) {
+        for (const bridgeId of Array.from(bridgeMap.keys())) {
             if (!nextBridges.has(bridgeId)) {
+                const record = bridgeMap.get(bridgeId);
+                cleanupForwardMappings(messageId, bridgeId, record);
                 bridgeMap.delete(bridgeId);
             }
         }
@@ -387,6 +523,43 @@ async function fetchChannelSafe(id) {
 
 function isThreadChannel(channel) {
     return typeof channel?.isThread === 'function' && channel.isThread();
+}
+
+async function fetchMessageFromTarget({ channelId, threadId, messageId }) {
+    const lookupId = threadId ?? channelId;
+    if (!lookupId || !messageId) return null;
+    const channel = await fetchChannelSafe(lookupId);
+    if (!channel || typeof channel.isTextBased !== 'function' || !channel.isTextBased()) return null;
+
+    const cache = channel.messages?.cache ?? null;
+    if (cache?.get) {
+        const cached = cache.get(messageId);
+        if (cached) return cached;
+    }
+    if (typeof channel.messages?.fetch !== 'function') return null;
+    try {
+        return await channel.messages.fetch(messageId);
+    } catch {
+        return null;
+    }
+}
+
+async function deleteOriginalMessageIfPresent({ record, originalId }) {
+    if (!record || !originalId) return { success: false };
+    const channelId = record.originChannelId ?? null;
+    const threadId = record.originThreadId ?? null;
+    const message = await fetchMessageFromTarget({ channelId, threadId, messageId: originalId });
+    if (!message || typeof message.delete !== 'function') {
+        return { success: false };
+    }
+
+    try {
+        suppressDeletion(originalId);
+        await message.delete();
+        return { success: true };
+    } catch (error) {
+        return { success: false, error };
+    }
 }
 
 async function resolveThreadOptions({ bridgeId, target, message, originThreadId }) {
@@ -553,15 +726,21 @@ function prepareEditPayload({ message, bridgeId }) {
     return payload;
 }
 
-export async function init({ client, config, logger }) {
+export async function init({ client, config, logger, db }) {
     runtime.config = config;
     runtime.logger = logger;
     runtime.client = client;
+    runtime.db = db ?? null;
     runtime.webhookCache = new Map();
     runtime.messageLinks = new Map();
+    runtime.reverseMessageLinks = new Map();
     runtime.mirroredMessageIds = new Set();
     runtime.threadMirrors = new Map();
+    runtime.linkCollection = null;
+    runtime.suppressedDeletes = new Set();
     runtime.dirty = true;
+
+    hydratePersistedLinks();
 
     config.rainbowBridge = normalizeRainbowBridgeConfig(config.rainbowBridge);
     rebuildState();
@@ -610,6 +789,9 @@ export async function init({ client, config, logger }) {
         if (originThreadId && !record.originThreadId) {
             record.originThreadId = originThreadId;
         }
+        if (!record.originChannelId) {
+            record.originChannelId = originChannelId;
+        }
         const key = targetThreadId ?? targetChannelId;
         record.forwarded.set(key, {
             messageId: targetMessageId,
@@ -619,6 +801,12 @@ export async function init({ client, config, logger }) {
 
         if (targetMessageId) {
             runtime.mirroredMessageIds.add(targetMessageId);
+            runtime.reverseMessageLinks.set(targetMessageId, {
+                originalId,
+                bridgeId,
+                channelId: targetChannelId,
+                threadId: targetThreadId ?? null
+            });
         }
         if (originThreadId && targetThreadId) {
             rememberThreadMapping({
@@ -628,6 +816,8 @@ export async function init({ client, config, logger }) {
                 targetThreadId
             });
         }
+
+        persistLinkRecord(originalId, bridgeId, record);
     }
 
     function collectBridgeEntries(message, channelLookup) {
@@ -796,25 +986,64 @@ export async function init({ client, config, logger }) {
     }
 
     async function mirrorDeletionForMessage(message) {
-        const { knownWebhookIds, bridges } = getActiveState();
+        const { bridges } = getActiveState();
         const messageId = message?.id ?? message?.message?.id ?? message;
         if (!messageId) return;
-        const webhookId = message?.webhookId ?? message?.message?.webhookId ?? null;
-        if (webhookId && knownWebhookIds.has(webhookId)) {
+
+        if (runtime.suppressedDeletes.has(messageId)) {
+            runtime.suppressedDeletes.delete(messageId);
             return;
         }
-        if (!runtime.messageLinks.has(messageId)) return;
 
-        const bridgeMap = runtime.messageLinks.get(messageId);
-        runtime.messageLinks.delete(messageId);
+        let originalId = messageId;
+        if (!runtime.messageLinks.has(messageId)) {
+            const reverseInfo = runtime.reverseMessageLinks.get(messageId);
+            if (!reverseInfo) {
+                return;
+            }
+            originalId = reverseInfo.originalId;
+        }
 
-        for (const [bridgeId, record] of bridgeMap.entries()) {
+        const bridgeMap = runtime.messageLinks.get(originalId);
+        if (!bridgeMap?.size) {
+            return;
+        }
+
+        const entries = Array.from(bridgeMap.entries());
+        const originNeedsDeletion = originalId !== messageId;
+
+        if (originNeedsDeletion) {
+            let attempted = false;
+            for (const [, record] of entries) {
+                if (attempted) break;
+                if (!record) continue;
+                attempted = true;
+                const result = await deleteOriginalMessageIfPresent({ record, originalId });
+                if (!result?.success) {
+                    const errMsg = result?.error?.message ?? result?.error ?? null;
+                    if (errMsg) {
+                        logger?.warn?.(`[rainbow-bridge] Failed to delete source message ${originalId}: ${errMsg}`);
+                    } else {
+                        logger?.warn?.(`[rainbow-bridge] Unable to delete source message ${originalId} while mirroring a removal.`);
+                    }
+                }
+            }
+        }
+
+        for (const [bridgeId, record] of entries) {
+            if (!record) continue;
             const bridge = bridges.get(bridgeId);
-            if (!bridge) continue;
             const originIds = new Set();
             if (record.originChannelId) originIds.add(record.originChannelId);
             if (record.originParentId) originIds.add(record.originParentId);
             if (record.originThreadId) originIds.add(record.originThreadId);
+
+            if (!bridge) {
+                cleanupForwardMappings(originalId, bridgeId, record);
+                bridgeMap.delete(bridgeId);
+                continue;
+            }
+
             const targets = bridge.channels.filter((ch) => {
                 const matchIds = ch.matchIds ?? new Set([ch.channelId]);
                 for (const id of matchIds) {
@@ -822,14 +1051,15 @@ export async function init({ client, config, logger }) {
                 }
                 return true;
             });
+
             for (const target of targets) {
                 const forwarded = getForwardedRecord(record, target);
                 const targetMessageId = forwarded?.messageId ?? null;
-                if (!targetMessageId) continue;
-                runtime.mirroredMessageIds.delete(targetMessageId);
+                if (!targetMessageId || targetMessageId === messageId) continue;
                 const threadId = forwarded?.threadId ?? target.threadId ?? null;
                 try {
                     const webhook = getWebhookClient(target);
+                    suppressDeletion(targetMessageId);
                     if (threadId) {
                         await webhook.deleteMessage(targetMessageId, threadId).catch(() => {});
                     } else {
@@ -839,7 +1069,12 @@ export async function init({ client, config, logger }) {
                     logger?.warn?.(`[rainbow-bridge] Failed to delete mirrored message ${targetMessageId} in ${target.channelId}: ${err?.message ?? err}`);
                 }
             }
+
+            cleanupForwardMappings(originalId, bridgeId, record);
+            bridgeMap.delete(bridgeId);
         }
+
+        runtime.messageLinks.delete(originalId);
     }
 
     async function handleMessageDelete(message) {
@@ -862,16 +1097,263 @@ export async function init({ client, config, logger }) {
         }
     }
 
-    async function handleReactionUpdate(reaction) {
+    function getEmojiInfo(emoji) {
+        if (!emoji) return null;
+        const id = emoji.id ? String(emoji.id) : null;
+        const name = emoji.name ?? (typeof emoji.toString === 'function' ? emoji.toString() : null);
+        if (!id && !name) return null;
+        const reaction = id ? `${name ?? 'emoji'}:${id}` : name;
+        return { id, name, reaction };
+    }
+
+    function resolveMessageBridgeEntries(messageId) {
+        const entries = [];
+        if (!messageId) return entries;
+        if (runtime.messageLinks.has(messageId)) {
+            const map = runtime.messageLinks.get(messageId);
+            for (const [bridgeId, record] of map.entries()) {
+                entries.push({
+                    originId: messageId,
+                    bridgeId,
+                    record,
+                    sourceType: 'origin',
+                    sourceForward: null
+                });
+            }
+        }
+        if (runtime.reverseMessageLinks.has(messageId)) {
+            const reverse = runtime.reverseMessageLinks.get(messageId);
+            const map = runtime.messageLinks.get(reverse.originalId);
+            const record = map?.get(reverse.bridgeId);
+            if (record) {
+                const existing = entries.find((entry) => entry.bridgeId === reverse.bridgeId && entry.originId === reverse.originalId);
+                if (existing) {
+                    existing.sourceType = 'forwarded';
+                    existing.sourceForward = reverse;
+                } else {
+                    entries.push({
+                        originId: reverse.originalId,
+                        bridgeId: reverse.bridgeId,
+                        record,
+                        sourceType: 'forwarded',
+                        sourceForward: reverse
+                    });
+                }
+            }
+        }
+        return entries;
+    }
+
+    function buildReactionTargets({ record, originId, sourceMessageId, sourceType, sourceForward }) {
+        const targets = [];
+        const seen = new Set();
+
+        const addTarget = ({ messageId, channelId, threadId }) => {
+            if (!messageId || messageId === sourceMessageId) return;
+            if (seen.has(messageId)) return;
+            if (!channelId && !threadId) return;
+            targets.push({
+                messageId,
+                channelId: channelId ?? null,
+                threadId: threadId ?? null
+            });
+            seen.add(messageId);
+        };
+
+        if (sourceType === 'origin') {
+            const forwarded = record.forwarded instanceof Map ? record.forwarded.values() : [];
+            for (const value of forwarded) {
+                if (!value) continue;
+                addTarget({
+                    messageId: value.messageId ?? null,
+                    channelId: value.channelId ?? null,
+                    threadId: value.threadId ?? null
+                });
+            }
+            return targets;
+        }
+
+        if (record.originChannelId) {
+            addTarget({
+                messageId: originId,
+                channelId: record.originChannelId,
+                threadId: record.originThreadId ?? null
+            });
+        }
+
+        const forwardedValues = record.forwarded instanceof Map ? record.forwarded.values() : [];
+        for (const value of forwardedValues) {
+            if (!value) continue;
+            if (sourceForward && value.messageId === sourceForward.messageId) continue;
+            addTarget({
+                messageId: value.messageId ?? null,
+                channelId: value.channelId ?? null,
+                threadId: value.threadId ?? null
+            });
+        }
+
+        return targets;
+    }
+
+    function resolveReactionFromMessage(message, emojiInfo) {
+        if (!message?.reactions || !emojiInfo) return null;
+        const cache = message.reactions.cache ?? null;
+        if (cache?.values) {
+            for (const reaction of cache.values()) {
+                if (!reaction?.emoji) continue;
+                if (emojiInfo.id && reaction.emoji.id === emojiInfo.id) {
+                    return reaction;
+                }
+                if (!emojiInfo.id && reaction.emoji.name === emojiInfo.name) {
+                    return reaction;
+                }
+            }
+        }
+        if (typeof message.reactions.resolve === 'function') {
+            return message.reactions.resolve(emojiInfo.id ?? emojiInfo.reaction ?? emojiInfo.name ?? null) ?? null;
+        }
+        return null;
+    }
+
+    async function applyReactionOperation({ target, emojiInfo, operation }) {
+        const message = await fetchMessageFromTarget({
+            channelId: target.channelId,
+            threadId: target.threadId,
+            messageId: target.messageId
+        });
+        if (!message) return;
+
+        if (operation === 'add') {
+            if (!emojiInfo?.reaction) return;
+            try {
+                await message.react(emojiInfo.reaction);
+            } catch (err) {
+                runtime.logger?.warn?.(`[rainbow-bridge] Failed to mirror reaction ${emojiInfo.reaction} on ${target.messageId}: ${err?.message ?? err}`);
+            }
+            return;
+        }
+
+        if (operation === 'remove') {
+            const botId = runtime.client?.user?.id ?? null;
+            if (!botId || !emojiInfo) return;
+            const reaction = resolveReactionFromMessage(message, emojiInfo);
+            if (!reaction) return;
+            try {
+                await reaction.users.remove(botId);
+            } catch (err) {
+                runtime.logger?.warn?.(`[rainbow-bridge] Failed to remove mirrored reaction ${emojiInfo.reaction} on ${target.messageId}: ${err?.message ?? err}`);
+            }
+            return;
+        }
+
+        if (operation === 'clear') {
+            const botId = runtime.client?.user?.id ?? null;
+            if (!botId) return;
+            const cache = message.reactions?.cache ?? null;
+            const iterable = cache?.values ? cache.values() : [];
+            for (const reaction of iterable) {
+                if (!reaction) continue;
+                try {
+                    await reaction.users.remove(botId);
+                } catch {}
+            }
+        }
+    }
+
+    async function mirrorReactionChange({ type, message, emoji }) {
+        const entries = resolveMessageBridgeEntries(message?.id);
+        if (!entries.length) return;
+        const emojiInfo = getEmojiInfo(emoji);
+        if ((type === 'add' || type === 'remove' || type === 'removeEmoji') && !emojiInfo) return;
+
+        for (const entry of entries) {
+            const targets = buildReactionTargets({
+                record: entry.record,
+                originId: entry.originId,
+                sourceMessageId: message.id,
+                sourceType: entry.sourceType,
+                sourceForward: entry.sourceForward ?? null
+            });
+            for (const target of targets) {
+                const operation = type === 'add' ? 'add' : 'remove';
+                await applyReactionOperation({ target, emojiInfo, operation });
+            }
+        }
+    }
+
+    async function mirrorReactionClear(message) {
+        const entries = resolveMessageBridgeEntries(message?.id);
+        if (!entries.length) return;
+        for (const entry of entries) {
+            const targets = buildReactionTargets({
+                record: entry.record,
+                originId: entry.originId,
+                sourceMessageId: message.id,
+                sourceType: entry.sourceType,
+                sourceForward: entry.sourceForward ?? null
+            });
+            for (const target of targets) {
+                await applyReactionOperation({ target, emojiInfo: null, operation: 'clear' });
+            }
+        }
+    }
+
+    async function handleReactionAdd(reaction, user) {
+        try {
+            const actorId = user?.id ?? reaction?.userId ?? null;
+            if (actorId && runtime.client?.user?.id && actorId === runtime.client.user.id) return;
+            const partialMessage = reaction?.message ?? null;
+            const message = partialMessage?.partial
+                ? await partialMessage.fetch().catch(() => null)
+                : partialMessage;
+            if (!message) return;
+            await mirrorReactionChange({ type: 'add', message, emoji: reaction?.emoji ?? null });
+            await syncForwardedMessage(message);
+        } catch (err) {
+            logger?.error?.(`[rainbow-bridge] messageReactionAdd error: ${err?.message ?? err}`);
+        }
+    }
+
+    async function handleReactionRemove(reaction, user) {
+        try {
+            const actorId = user?.id ?? reaction?.userId ?? null;
+            if (actorId && runtime.client?.user?.id && actorId === runtime.client.user.id) return;
+            const partialMessage = reaction?.message ?? null;
+            const message = partialMessage?.partial
+                ? await partialMessage.fetch().catch(() => null)
+                : partialMessage;
+            if (!message) return;
+            await mirrorReactionChange({ type: 'remove', message, emoji: reaction?.emoji ?? null });
+            await syncForwardedMessage(message);
+        } catch (err) {
+            logger?.error?.(`[rainbow-bridge] messageReactionRemove error: ${err?.message ?? err}`);
+        }
+    }
+
+    async function handleReactionRemoveEmoji(reaction) {
         try {
             const partialMessage = reaction?.message ?? null;
             const message = partialMessage?.partial
                 ? await partialMessage.fetch().catch(() => null)
                 : partialMessage;
             if (!message) return;
+            await mirrorReactionChange({ type: 'removeEmoji', message, emoji: reaction?.emoji ?? null });
             await syncForwardedMessage(message);
         } catch (err) {
-            logger?.error?.(`[rainbow-bridge] messageReaction error: ${err?.message ?? err}`);
+            logger?.error?.(`[rainbow-bridge] messageReactionRemoveEmoji error: ${err?.message ?? err}`);
+        }
+    }
+
+    async function handleReactionRemoveAll(message) {
+        try {
+            const resolved = message?.partial
+                ? await message.fetch().catch(() => null)
+                : message;
+            if (!resolved) return;
+            await mirrorReactionClear(resolved);
+            await syncForwardedMessage(resolved);
+        } catch (err) {
+            logger?.error?.(`[rainbow-bridge] messageReactionRemoveAll error: ${err?.message ?? err}`);
         }
     }
 
@@ -966,14 +1448,10 @@ export async function init({ client, config, logger }) {
     client.on('messageUpdate', handleMessageUpdate);
     client.on('messageDelete', handleMessageDelete);
     client.on('messageDeleteBulk', handleMessageDeleteBulk);
-    client.on('messageReactionAdd', handleReactionUpdate);
-    client.on('messageReactionRemove', handleReactionUpdate);
-    client.on('messageReactionRemoveAll', async (message) => {
-        await syncForwardedMessage(message);
-    });
-    client.on('messageReactionRemoveEmoji', async (reaction) => {
-        await handleReactionUpdate(reaction);
-    });
+    client.on('messageReactionAdd', handleReactionAdd);
+    client.on('messageReactionRemove', handleReactionRemove);
+    client.on('messageReactionRemoveAll', handleReactionRemoveAll);
+    client.on('messageReactionRemoveEmoji', handleReactionRemoveEmoji);
     client.on('interactionCreate', async (interaction) => {
         if (!interaction?.isChatInputCommand?.()) return;
         if (interaction.commandName !== 'bridgepurge') return;
