@@ -15,6 +15,7 @@ import {
 import { writeConfig } from '../../core/config.js';
 import { createLoggingSetup, LOGGING_CHANNEL_CATEGORIES } from '../logging-forwarder/setup.js';
 import { createWelcomeSetup } from '../welcome-cards/setup.js';
+import { createEmbedBuilderSetup } from '../embed-builder/setup.js';
 import {
     DEFAULT_WELCOME_MESSAGE,
     LEGACY_DEFAULT_WELCOME_MESSAGE,
@@ -44,6 +45,7 @@ const loggingSetup = createLoggingSetup({ panelStore, saveConfig, fetchGuild });
 const welcomeSetup = createWelcomeSetup({ panelStore, saveConfig, fetchGuild });
 const rainbowSetup = createRainbowBridgeSetup({ panelStore, saveConfig, fetchGuild, collectManageableGuilds });
 const autobouncerSetup = createAutobouncerSetup({ panelStore, saveConfig, fetchGuild });
+const embedBuilderSetup = createEmbedBuilderSetup({ panelStore, saveConfig, fetchGuild });
 
 export const commands = [
     new SlashCommandBuilder()
@@ -130,6 +132,11 @@ export function init({ client, config, logger }) {
                 await rainbowSetup.handleInteraction({ interaction, entry, config, key, client, logger });
                 return;
             }
+
+            if (module === 'embed') {
+                await embedBuilderSetup.handleInteraction({ interaction, entry, config, client, key, logger });
+                return;
+            }
         } catch (err) {
             logger?.error?.(`[setup] Interaction error: ${err?.message ?? err}`);
             try {
@@ -155,6 +162,7 @@ function ensureConfigShape(config) {
     });
     autobouncerSetup.prepareConfig(config);
     rainbowSetup.prepareConfig(config);
+    embedBuilderSetup.prepareConfig(config);
 }
 
 function sanitizeIdArray(value) {
@@ -352,7 +360,8 @@ async function buildHomeView({ client, config, guildOptions }) {
         { label: 'Logging', value: 'logging', description: 'Map main servers to logging channels.' },
         { label: 'Welcome cards', value: 'welcome', description: 'Configure welcome automation and autoroles.' },
         { label: 'Rainbow Bridge', value: 'rainbow', description: 'Link channels across servers.' },
-        { label: 'Autobouncer', value: 'autobouncer', description: 'Manage autoban keywords and notification channel.' }
+        { label: 'Autobouncer', value: 'autobouncer', description: 'Manage autoban keywords and notification channel.' },
+        { label: 'Embed builder', value: 'embed', description: 'Design reusable embeds with buttons.' }
     );
     components.push(new ActionRowBuilder().addComponents(moduleMenu));
 
@@ -385,6 +394,17 @@ async function handleHomeInteraction({ interaction, config, client, logger, home
             loggingEntry.availableGuildIds = config.mainServerIds;
             panelStore.set(loggingKey, loggingEntry);
         }
+        const embedKey = panelKey(interaction.user?.id, 'embed');
+        const embedEntry = panelStore.get(embedKey);
+        if (embedEntry) {
+            const available = embedBuilderSetup.collectEligibleGuildIds(config);
+            embedEntry.availableGuildIds = available;
+            if (embedEntry.guildId && !available.includes(embedEntry.guildId)) {
+                embedEntry.guildId = available[0] ?? null;
+                embedEntry.mode = 'default';
+            }
+            panelStore.set(embedKey, embedEntry);
+        }
         return;
     }
 
@@ -400,6 +420,7 @@ async function handleHomeInteraction({ interaction, config, client, logger, home
 
         const loggingKey = panelKey(interaction.user?.id, 'logging');
         const welcomeKey = panelKey(interaction.user?.id, 'welcome');
+        const embedKey = panelKey(interaction.user?.id, 'embed');
         const loggingEntry = panelStore.get(loggingKey);
         if (loggingEntry) {
             loggingEntry.availableGuildIds = config.mainServerIds;
@@ -417,6 +438,16 @@ async function handleHomeInteraction({ interaction, config, client, logger, home
                 welcomeEntry.mode = 'default';
             }
             panelStore.set(welcomeKey, welcomeEntry);
+        }
+        const embedEntry = panelStore.get(embedKey);
+        if (embedEntry) {
+            const available = embedBuilderSetup.collectEligibleGuildIds(config);
+            embedEntry.availableGuildIds = available;
+            if (embedEntry.guildId && !available.includes(embedEntry.guildId)) {
+                embedEntry.guildId = available[0] ?? null;
+                embedEntry.mode = 'default';
+            }
+            panelStore.set(embedKey, embedEntry);
         }
         return;
     }
@@ -488,6 +519,33 @@ async function handleHomeInteraction({ interaction, config, client, logger, home
             const message = await interaction.update(view);
             panelStore.set(moduleKey, { message, guildId: null, mode: 'default', context: {} });
             panelStore.set(homeKey, { message, guildOptions, view: 'module', module: 'autobouncer' });
+            return;
+        }
+
+        if (target === 'embed') {
+            const available = embedBuilderSetup.collectEligibleGuildIds(config);
+            const configuredGuildId = sanitizeSnowflakeId(config.embedBuilder?.guildId);
+            const initialId = configuredGuildId && available.includes(configuredGuildId)
+                ? configuredGuildId
+                : (available[0] ?? configuredGuildId ?? null);
+            const guild = initialId ? await fetchGuild(client, initialId) : null;
+            const view = await embedBuilderSetup.buildView({
+                config,
+                client,
+                guild,
+                mode: 'default',
+                context: {},
+                availableGuildIds: available
+            });
+            const message = await interaction.update(view);
+            panelStore.set(moduleKey, {
+                message,
+                guildId: guild?.id ?? initialId ?? null,
+                mode: 'default',
+                context: {},
+                availableGuildIds: available
+            });
+            panelStore.set(homeKey, { message, guildOptions, view: 'module', module: 'embed' });
             return;
         }
     }
