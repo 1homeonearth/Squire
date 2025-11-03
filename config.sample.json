@@ -11,7 +11,8 @@
     "auto-bouncer",
     "logging-forwarder",
     "rainbow-bridge",
-    "welcome-cards"
+    "welcome-cards",
+    "experience"
   ],
   "mapping": "$ENV{MAPPING_JSON}",
   "loggingChannels": "$ENV{LOGGING_CHANNELS_JSON}",
@@ -34,6 +35,7 @@
     "scanBio": true
   },
   "embedBuilder": {},
+  "experience": "$ENV{EXPERIENCE_CONFIG_JSON}",
   "mainServerIds": "$ENV{MAIN_SERVER_IDS_JSON}",
   "welcome": "$ENV{WELCOME_CONFIG_JSON}"
 }

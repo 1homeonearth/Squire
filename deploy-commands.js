@@ -24,7 +24,35 @@ const commands = [
         name: 'setup',
         description: 'Open the interactive setup panel',
         default_member_permissions: MANAGE_GUILD,
-            dm_permission: false
+        dm_permission: false
+    },
+    {
+        name: 'xp',
+        description: 'Manage member experience points',
+        default_member_permissions: MANAGE_GUILD,
+        dm_permission: false,
+        options: [
+            {
+                type: 1,
+                name: 'set',
+                description: "Set a member's experience to an exact value",
+                options: [
+                    {
+                        type: 6,
+                        name: 'member',
+                        description: 'Member to update',
+                        required: true
+                    },
+                    {
+                        type: 4,
+                        name: 'amount',
+                        description: 'Exact XP amount to set (0 or greater)',
+                        required: true,
+                        min_value: 0
+                    }
+                ]
+            }
+        ]
     }
 ];
 

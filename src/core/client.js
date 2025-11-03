@@ -14,7 +14,8 @@ export async function createClient({ token, logger }) {
             GatewayIntentBits.GuildMessages,
             GatewayIntentBits.GuildMessageReactions,
             GatewayIntentBits.MessageContent,
-            GatewayIntentBits.GuildMembers // required for join/leave + autoban + welcome cards
+            GatewayIntentBits.GuildMembers, // required for join/leave + autoban + welcome cards
+            GatewayIntentBits.GuildVoiceStates // experience module voice tracking
         ],
         partials: [
             Partials.Message,

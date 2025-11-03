@@ -25,6 +25,7 @@ import {
 import { createRainbowBridgeSetup } from '../rainbow-bridge/setup.js';
 import { normalizeRainbowBridgeConfig, refresh as refreshRainbowBridge } from '../rainbow-bridge/index.js';
 import { createAutobouncerSetup } from '../auto-bouncer/setup.js';
+import { createExperienceSetup } from '../experience/setup.js';
 import {
     appendHomeButtonRow,
     collectCategories,
@@ -46,6 +47,7 @@ const welcomeSetup = createWelcomeSetup({ panelStore, saveConfig, fetchGuild });
 const rainbowSetup = createRainbowBridgeSetup({ panelStore, saveConfig, fetchGuild, collectManageableGuilds });
 const autobouncerSetup = createAutobouncerSetup({ panelStore, saveConfig, fetchGuild });
 const embedBuilderSetup = createEmbedBuilderSetup({ panelStore, saveConfig, fetchGuild });
+const experienceSetup = createExperienceSetup({ panelStore, saveConfig });
 
 export const commands = [
     new SlashCommandBuilder()
@@ -137,6 +139,11 @@ export function init({ client, config, logger }) {
                 await embedBuilderSetup.handleInteraction({ interaction, entry, config, client, key, logger });
                 return;
             }
+
+            if (module === 'experience') {
+                await experienceSetup.handleInteraction({ interaction, entry, config, client, key, logger });
+                return;
+            }
         } catch (err) {
             logger?.error?.(`[setup] Interaction error: ${err?.message ?? err}`);
             try {
@@ -163,6 +170,7 @@ function ensureConfigShape(config) {
     autobouncerSetup.prepareConfig(config);
     rainbowSetup.prepareConfig(config);
     embedBuilderSetup.prepareConfig(config);
+    experienceSetup.prepareConfig(config);
 }
 
 function sanitizeIdArray(value) {
@@ -298,6 +306,16 @@ async function buildHomeView({ client, config, guildOptions }) {
                 return `${count} bridge${count === 1 ? '' : 's'} configured.`;
             })(),
             inline: false
+        },
+        {
+            name: 'Experience',
+            value: (() => {
+                const guildEntries = Object.values(config.experience ?? {});
+                if (!guildEntries.length) return 'No XP rules configured yet.';
+                const ruleCount = guildEntries.reduce((total, entry) => total + (entry?.rules?.length ?? 0), 0);
+                return `${ruleCount} rule set${ruleCount === 1 ? '' : 's'} across ${guildEntries.length} server${guildEntries.length === 1 ? '' : 's'}.`;
+            })(),
+            inline: false
         }
     );
 
@@ -361,7 +379,8 @@ async function buildHomeView({ client, config, guildOptions }) {
         { label: 'Welcome cards', value: 'welcome', description: 'Configure welcome automation and autoroles.' },
         { label: 'Rainbow Bridge', value: 'rainbow', description: 'Link channels across servers.' },
         { label: 'Autobouncer', value: 'autobouncer', description: 'Manage autoban keywords and notification channel.' },
-        { label: 'Embed builder', value: 'embed', description: 'Design reusable embeds with buttons.' }
+        { label: 'Embed builder', value: 'embed', description: 'Design reusable embeds with buttons.' },
+        { label: 'Experience', value: 'experience', description: 'Configure XP rules and leaderboards.' }
     );
     components.push(new ActionRowBuilder().addComponents(moduleMenu));
 
@@ -404,6 +423,16 @@ async function handleHomeInteraction({ interaction, config, client, logger, home
                 embedEntry.mode = 'default';
             }
             panelStore.set(embedKey, embedEntry);
+        }
+        const experienceKey = panelKey(interaction.user?.id, 'experience');
+        const experienceEntry = panelStore.get(experienceKey);
+        if (experienceEntry) {
+            experienceEntry.availableGuildIds = config.mainServerIds;
+            if (experienceEntry.guildId && !config.mainServerIds.includes(experienceEntry.guildId)) {
+                experienceEntry.guildId = config.mainServerIds[0] ?? null;
+                experienceEntry.context = {};
+            }
+            panelStore.set(experienceKey, experienceEntry);
         }
         return;
     }
@@ -448,6 +477,16 @@ async function handleHomeInteraction({ interaction, config, client, logger, home
                 embedEntry.mode = 'default';
             }
             panelStore.set(embedKey, embedEntry);
+        }
+        const experienceKey = panelKey(interaction.user?.id, 'experience');
+        const experienceEntry = panelStore.get(experienceKey);
+        if (experienceEntry) {
+            experienceEntry.availableGuildIds = config.mainServerIds;
+            if (experienceEntry.guildId && !config.mainServerIds.includes(experienceEntry.guildId)) {
+                experienceEntry.guildId = config.mainServerIds[0] ?? null;
+                experienceEntry.context = {};
+            }
+            panelStore.set(experienceKey, experienceEntry);
         }
         return;
     }
