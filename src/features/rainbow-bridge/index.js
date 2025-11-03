@@ -327,12 +327,24 @@ function buildPresentation({ bridgeId, message }) {
     const headerLine = buildHeaderLine(message);
     const headerForContent = sanitizeMentions(headerLine);
 
+    const attachmentUrls = Array.from(message.attachments?.values?.() ?? [])
+        .map(att => att?.url)
+        .filter(Boolean);
+
+    const viewLink = `[View message](https://discord.com/channels/${message.guildId}/${message.channelId}/${message.id})`;
+
+    const attachmentsForEmbed = attachmentUrls.length
+        ? sanitizeMentions(trunc(attachmentUrls.join('\n'), 1024))
+        : '';
+    const viewLinkForEmbed = viewLink ? sanitizeMentions(trunc(viewLink, 1024)) : '';
+
     const embedParts = [];
     if (normalizedContent) embedParts.push(normalizedContent);
     if (pollForEmbed) embedParts.push(pollForEmbed);
     if (stickersForEmbed) embedParts.push(stickersForEmbed);
+    if (attachmentsForEmbed) embedParts.push(attachmentsForEmbed);
+    if (viewLinkForEmbed) embedParts.push(viewLinkForEmbed);
 
-    const viewLink = `[View message](https://discord.com/channels/${message.guildId}/${message.channelId}/${message.id})`;
     const embedDescription = embedParts.join('\n\n').trim();
     const safeDescription = embedDescription.length ? trunc(embedDescription, 4096) : '';
 
@@ -350,10 +362,6 @@ function buildPresentation({ bridgeId, message }) {
         const preferred = media.find(url => /\.(gif|mp4|webm)(?:$|\?)/i.test(url)) || media[0];
         embed.setImage(preferred);
     }
-
-    const attachmentUrls = Array.from(message.attachments?.values?.() ?? [])
-        .map(att => att?.url)
-        .filter(Boolean);
 
     return {
         hasYouTube,
@@ -388,29 +396,14 @@ function prepareSendPayload({ message, bridgeId }) {
     };
 
     if (presentation.hasYouTube) {
-        const parts = [];
-        if (presentation.headerForContent) parts.push(presentation.headerForContent);
-        if (presentation.normalizedContent) parts.push(trunc(presentation.normalizedContent, MAX_CONTENT_LENGTH));
-        if (presentation.pollForContent) parts.push(trunc(presentation.pollForContent, MAX_CONTENT_LENGTH));
-        if (presentation.stickersForContent) parts.push(trunc(presentation.stickersForContent, MAX_CONTENT_LENGTH));
-        if (presentation.attachmentUrls.length) parts.push(presentation.attachmentUrls.join('\n'));
-        if (presentation.viewLink) parts.push(trunc(presentation.viewLink, MAX_CONTENT_LENGTH));
-        const payloadContent = trunc(parts.join('\n\n').trim(), MAX_CONTENT_LENGTH);
-        if (payloadContent.length === 0 && !presentation.media.length) {
+        const youtubeContent = presentation.normalizedContent
+            ? trunc(presentation.normalizedContent, MAX_CONTENT_LENGTH)
+            : '';
+        if (youtubeContent.length === 0 && !presentation.media.length) {
             return null;
         }
-        if (payloadContent.length) {
-            payload.content = payloadContent;
-        }
-    } else {
-        const contentParts = [];
-        if (presentation.headerForContent) contentParts.push(trunc(presentation.headerForContent, MAX_CONTENT_LENGTH));
-        if (presentation.normalizedContent) contentParts.push(trunc(presentation.normalizedContent, MAX_CONTENT_LENGTH));
-        if (presentation.pollForContent) contentParts.push(trunc(presentation.pollForContent, MAX_CONTENT_LENGTH));
-        if (presentation.stickersForContent) contentParts.push(trunc(presentation.stickersForContent, MAX_CONTENT_LENGTH));
-        if (presentation.viewLink) contentParts.push(trunc(presentation.viewLink, MAX_CONTENT_LENGTH));
-        if (contentParts.length) {
-            payload.content = trunc(contentParts.join('\n\n'), MAX_CONTENT_LENGTH);
+        if (youtubeContent.length) {
+            payload.content = youtubeContent;
         }
     }
 
@@ -425,25 +418,12 @@ function prepareEditPayload({ message, bridgeId }) {
     };
 
     if (presentation.hasYouTube) {
-        const parts = [];
-        if (presentation.headerForContent) parts.push(trunc(presentation.headerForContent, MAX_CONTENT_LENGTH));
-        if (presentation.normalizedContent) parts.push(trunc(presentation.normalizedContent, MAX_CONTENT_LENGTH));
-        if (presentation.pollForContent) parts.push(trunc(presentation.pollForContent, MAX_CONTENT_LENGTH));
-        if (presentation.stickersForContent) parts.push(trunc(presentation.stickersForContent, MAX_CONTENT_LENGTH));
-        if (presentation.attachmentUrls.length) parts.push(presentation.attachmentUrls.join('\n'));
-        if (presentation.viewLink) parts.push(trunc(presentation.viewLink, MAX_CONTENT_LENGTH));
-        const payloadContent = trunc(parts.join('\n\n').trim(), MAX_CONTENT_LENGTH);
-        payload.content = payloadContent;
-    } else {
-        const contentParts = [];
-        if (presentation.headerForContent) contentParts.push(trunc(presentation.headerForContent, MAX_CONTENT_LENGTH));
-        if (presentation.normalizedContent) contentParts.push(trunc(presentation.normalizedContent, MAX_CONTENT_LENGTH));
-        if (presentation.pollForContent) contentParts.push(trunc(presentation.pollForContent, MAX_CONTENT_LENGTH));
-        if (presentation.stickersForContent) contentParts.push(trunc(presentation.stickersForContent, MAX_CONTENT_LENGTH));
-        if (presentation.viewLink) contentParts.push(trunc(presentation.viewLink, MAX_CONTENT_LENGTH));
-        payload.content = contentParts.length
-            ? trunc(contentParts.join('\n\n'), MAX_CONTENT_LENGTH)
+        const youtubeContent = presentation.normalizedContent
+            ? trunc(presentation.normalizedContent, MAX_CONTENT_LENGTH)
             : '';
+        payload.content = youtubeContent;
+    } else {
+        payload.content = '';
     }
 
     return payload;
