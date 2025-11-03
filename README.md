@@ -74,7 +74,9 @@ squire.db.json          # LokiJS JSON dump (created on first run if not present)
 2. **Install dependencies** — `npm install`.
 3. **Run linting & tests** — `npm run lint` and `npm test` before pushing changes.
 4. **Type check (optional)** — `npm run build` invokes `tsc -p .` to surface declaration issues.
-5. **Deploy slash commands** — `npm run deploy:commands` publishes `/setup` (and any future commands) to the configured guilds.
+5. **Deploy slash commands** — `node deploy-commands.js` now publishes `/setup` (and any future commands) globally by default so
+   production hosts stay in sync even when `devGuildId` exists in `config.json`. Pass `--dev` (or export `SQUIRE_DEPLOY_DEV=1`)
+   to target the configured development guild for faster iteration.
 
 For production hosts, the `squirectl` helper wraps deployment tasks (fetching from `origin/main`, running `npm ci`, rendering config from environment, and managing the systemd unit).
 
@@ -205,6 +207,7 @@ All configuration lives in `config.json`, which is materialised by `scripts/rend
 | --- | ----------- |
 | `token` | Discord bot token (`DISCORD_TOKEN` env alternative). |
 | `applicationId` | Bot application/client ID (`APPLICATION_ID`). |
+| `devGuildId` | Optional guild ID used for dev-only slash command deploys when explicitly requested. |
 | `dbPath` | Path to the LokiJS persistence file (defaults to `./squire.db.json`). |
 | `loggingServerId` | Guild that receives forwarded logs and slash command deployments (`LOGGING_SERVER_ID`). |
 | `sampleRate` | Float between 0 and 1 for the logging forwarder (fraction of messages forwarded). |
@@ -328,7 +331,8 @@ Every change is persisted to `config.json`, so redeploys and restarts keep the c
 
 The repo ships with helper scripts for iterating on slash commands without waiting for global propagation:
 
-- `npm run deploy:commands` – Deploys commands to the logging server guild (fast, for testing).
+- `node deploy-commands.js` – Publishes commands globally by default; pass `--dev` or set `SQUIRE_DEPLOY_DEV=1` to target
+  `devGuildId` for instant dev testing.
 - `npm run cmds:list` – Lists global + guild slash commands for quick inspection.
 - `npm run cmds:wipe:guild` / `npm run cmds:wipe:global` – Removes commands without triggering Discord's entry-point errors.
 

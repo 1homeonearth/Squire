@@ -1,7 +1,8 @@
 // deploy-commands.js
 // Registers ONE slash command: /setup
 // Uses "devGuildId" from config.json (optional) for instant guild-scoped deploy during dev.
-// Otherwise, registers globally.
+// Guild-scoped deploys now require the --dev CLI flag or SQUIRE_DEPLOY_DEV env var.
+// Otherwise, registers globally even when devGuildId exists.
 //
 // Docs: Global vs guild scopes & registration endpoints. :contentReference[oaicite:0]{index=0}
 
@@ -58,9 +59,17 @@ const commands = [
 
 const rest = new REST({ version: '10' }).setToken(TOKEN);
 
+const cliFlags = new Set(process.argv.slice(2));
+const envFlag = String(process.env.SQUIRE_DEPLOY_DEV || '').trim().toLowerCase();
+const envRequestedDev = ['1', 'true', 'yes', 'on'].includes(envFlag);
+const useDevScope = cliFlags.has('--dev') || envRequestedDev;
+
 async function main() {
     console.log('Registering application (/) commands...');
-    if (DEV_GUILD_ID) {
+    if (useDevScope) {
+        if (!DEV_GUILD_ID) {
+            throw new Error('dev deploy requested but config.json is missing devGuildId');
+        }
         // Fast dev: overwrite commands in one guild (appears instantly). :contentReference[oaicite:1]{index=1}
         await rest.put(Routes.applicationGuildCommands(APP_ID, DEV_GUILD_ID), { body: commands });
         console.log(`✅ Guild commands registered in ${DEV_GUILD_ID} (dev mode).`);

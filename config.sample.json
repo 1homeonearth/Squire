@@ -1,6 +1,7 @@
 {
   "token": "$ENV{DISCORD_TOKEN}",
   "applicationId": "$ENV{APPLICATION_ID}",
+  "devGuildId": null,
   "dbPath": "./squire.db.json",
   "sampleRate": 1.0,
   "forwardBots": true,
