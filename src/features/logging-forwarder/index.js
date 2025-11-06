@@ -205,6 +205,23 @@ export async function init({ client, config, logger }) {
         }
     }
 
+    async function sendSystemLog(lines) {
+        const systemChannelId = loggingChannels?.system ?? null;
+        if (!loggingServerId || !systemChannelId) return;
+
+        const channel = await resolveLoggingChannel(systemChannelId);
+        if (!channel) return;
+
+        const content = Array.isArray(lines) ? lines.filter(Boolean).join('\n') : String(lines ?? '');
+        if (!content.trim()) return;
+
+        try {
+            await channel.send({ content, allowedMentions: { parse: [] } });
+        } catch (err) {
+            logger?.warn?.(`[systemlog] Failed to send system log to ${systemChannelId}: ${err?.message ?? err}`);
+        }
+    }
+
     async function findRecentAuditLogEntry(guild, type, targetId, predicate = null) {
         if (!guild || typeof guild.fetchAuditLogs !== 'function') {
             return null;
@@ -247,6 +264,93 @@ export async function init({ client, config, logger }) {
                 ? { ...source.loggingChannels }
                 : {};
         } catch {}
+    });
+
+    client.on('squire:experience:log', async (payload) => {
+        try {
+            if (!payload) return;
+            const systemChannelId = loggingChannels?.system ?? null;
+            if (!loggingServerId || !systemChannelId) return;
+
+            const guild = payload.guildId ? await client.guilds.fetch(payload.guildId).catch(() => null) : null;
+            const user = payload.userId ? await client.users.fetch(payload.userId).catch(() => null) : null;
+
+            const resolveChannelLabel = async (channelId) => {
+                if (!channelId) return null;
+                if (guild) {
+                    let channel = guild.channels?.cache?.get(channelId) ?? null;
+                    if (!channel && typeof guild.channels?.fetch === 'function') {
+                        channel = await guild.channels.fetch(channelId).catch(() => null);
+                    }
+                    if (channel) {
+                        return formatChannelLabel(channel, channelId);
+                    }
+                }
+                return `<#${channelId}>`;
+            };
+
+            const guildLabel = guild ? formatGuildLabel(guild) : `Unknown guild (${payload.guildId ?? 'n/a'})`;
+            const userLabel = user ? formatUserLabel(user) : `Unknown user (${payload.userId ?? 'n/a'})`;
+
+            const originLabel = await resolveChannelLabel(payload.sourceChannelId ?? null);
+            const announcedLabel = payload.channelId && payload.channelId !== payload.sourceChannelId
+                ? await resolveChannelLabel(payload.channelId)
+                : null;
+
+            const lines = [`⭐ **Experience** — ${guildLabel}`];
+            lines.push(`• User: ${userLabel}`);
+
+            const levelInfo = payload.levelDelta
+                ? `${payload.level ?? 'unknown'} (+${payload.levelDelta})`
+                : `${payload.level ?? 'unknown'}`;
+            lines.push(`• Level: ${levelInfo}`);
+
+            const xpParts = [];
+            if (Number.isFinite(payload.totalXp)) {
+                xpParts.push(String(payload.totalXp));
+            } else {
+                xpParts.push('unknown');
+            }
+            if (Number.isFinite(payload.xpAwarded) && payload.xpAwarded > 0) {
+                xpParts.push(`+${payload.xpAwarded}`);
+            }
+            lines.push(`• XP: ${xpParts.join(' ')}`);
+
+            if (payload.ruleName || payload.ruleId) {
+                const ruleParts = [];
+                if (payload.ruleName) ruleParts.push(payload.ruleName);
+                if (payload.ruleId) ruleParts.push(`(${payload.ruleId})`);
+                lines.push(`• Rule: ${ruleParts.join(' ')}`.trim());
+            }
+
+            if (originLabel) {
+                const sourceDescriptor = payload.sourceType
+                    ? `${originLabel} — ${payload.sourceType}`
+                    : originLabel;
+                lines.push(`• Source: ${sourceDescriptor}`);
+            }
+
+            if (payload.channelId) {
+                const statusLabel = announcedLabel ?? originLabel;
+                const status = payload.success === false
+                    ? `${statusLabel ?? `<#${payload.channelId}>`} (failed)`
+                    : statusLabel ?? `<#${payload.channelId}>`;
+                lines.push(`• Announced in: ${status}`);
+            } else if (payload.success === false) {
+                lines.push('• Announced in: (failed)');
+            }
+
+            if (payload.message) {
+                const trimmed = payload.message.length > 180
+                    ? `${payload.message.slice(0, 177)}…`
+                    : payload.message;
+                lines.push(`• Message: ${trimmed}`);
+            }
+
+            await sendSystemLog(lines);
+        } catch (err) {
+            logger?.warn?.(`[xp-log] Failed to record experience event: ${err?.message ?? err}`);
+        }
     });
 
     if (!config.mapping || typeof config.mapping !== 'object') {
