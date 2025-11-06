@@ -6,11 +6,13 @@ import {
     EmbedBuilder,
     SlashCommandBuilder,
     PermissionFlagsBits,
-    ChannelType
+    ChannelType,
+    StickerFormatType
 } from 'discord.js';
 import { ensureCollection } from '../../core/db.js';
 import { isYouTubeUrl, prepareForNativeEmbed } from '../../lib/youtube.js';
 import { formatPollLines } from '../../lib/poll-format.js';
+import { formatAsBlockQuote } from '../../lib/display.js';
 
 const RAINBOW = [0xFF0000, 0xFFA500, 0xFFFF00, 0x00FF00, 0x0000FF, 0x800080];
 
@@ -23,6 +25,7 @@ function trunc(str, max) {
 
 const COLOR_COLLECTION_NAME = 'rainbow_bridge_colors';
 const GIF_REGEX = /\.(gif)(?:$|\?)/i;
+const VIDEO_REGEX = /\.(gif|mp4)(?:$|\?)/i;
 
 function createMentionSanitizer(message) {
     const memberNames = new Map();
@@ -430,7 +433,8 @@ function persistLinkRecord(originalId, bridgeId, record) {
             forwarded.push({
                 messageId: value.messageId,
                 channelId: value.channelId,
-                threadId: value.threadId ?? null
+                threadId: value.threadId ?? null,
+                color: typeof value.color === 'number' ? value.color : null
             });
         }
     }
@@ -474,12 +478,14 @@ function hydratePersistedLinks() {
             const messageId = entry?.messageId ? String(entry.messageId) : null;
             const channelId = entry?.channelId ? String(entry.channelId) : null;
             const threadId = entry?.threadId ? String(entry.threadId) : null;
+            const color = typeof entry?.color === 'number' ? entry.color : null;
             if (!messageId || !channelId) continue;
             const key = threadId ?? channelId;
             forwarded.set(key, {
                 messageId,
                 channelId,
-                threadId: threadId ?? null
+                threadId: threadId ?? null,
+                color: color ?? null
             });
             runtime.mirroredMessageIds.add(messageId);
             runtime.reverseMessageLinks.set(messageId, {
@@ -654,6 +660,113 @@ function extractMedia(message) {
     return [...new Set(urls)];
 }
 
+function resolveStickerPreview(sticker) {
+    if (!sticker) return null;
+    const id = sticker.id ? String(sticker.id) : null;
+    if (!id) return null;
+    const name = sticker.name ? String(sticker.name) : 'Sticker';
+    const format = sticker.format ?? null;
+
+    let url = null;
+    if (typeof sticker.url === 'string' && sticker.url.length) {
+        if (format === StickerFormatType.Lottie && sticker.url.endsWith('.json')) {
+            url = `https://cdn.discordapp.com/stickers/${id}.png?size=320`;
+        } else {
+            url = sticker.url;
+        }
+    }
+
+    if (!url) {
+        if (format === StickerFormatType.GIF) {
+            url = `https://cdn.discordapp.com/stickers/${id}.gif`;
+        } else if (format === StickerFormatType.Lottie) {
+            url = `https://cdn.discordapp.com/stickers/${id}.png?size=320`;
+        } else {
+            url = `https://cdn.discordapp.com/stickers/${id}.png`;
+        }
+    }
+
+    if (!url) return null;
+    return { url, name };
+}
+
+function collectStickerMedia(message) {
+    const stickers = message?.stickers ?? null;
+    const results = [];
+    if (!stickers || !Number.isFinite(stickers.size) || stickers.size === 0) {
+        return results;
+    }
+
+    const iterator = typeof stickers.values === 'function' ? stickers.values() : null;
+    if (!iterator) return results;
+    for (const sticker of iterator) {
+        const preview = resolveStickerPreview(sticker);
+        if (!preview?.url) continue;
+        results.push(preview);
+    }
+    return results;
+}
+
+async function fetchReferencedMessage(message) {
+    if (!message?.reference?.messageId) return null;
+    if (typeof message.fetchReference !== 'function') return null;
+    try {
+        const reference = await message.fetchReference();
+        return reference ?? null;
+    } catch {
+        return null;
+    }
+}
+
+async function buildReplyPresentation(message) {
+    if (!message?.reference?.messageId) {
+        return null;
+    }
+
+    const referenced = await fetchReferencedMessage(message);
+    const repliedUser = referenced?.author ?? message?.mentions?.repliedUser ?? null;
+    const authorName = referenced?.member?.displayName
+        ?? repliedUser?.globalName
+        ?? repliedUser?.username
+        ?? repliedUser?.id
+        ?? null;
+
+    const sanitizeSource = createMentionSanitizer(referenced ?? message);
+    const rawPreview = referenced?.content ?? '';
+    const preview = sanitizeSource((rawPreview || '').trim());
+    const truncatedPreview = preview.length ? trunc(preview, 600) : '';
+    const quoteBlock = truncatedPreview ? formatAsBlockQuote(truncatedPreview) : '';
+
+    const header = authorName
+        ? `↩️ Replying to **${authorName}**`
+        : '↩️ Replying to a message';
+
+    const linkGuildId = referenced?.guildId ?? message.guildId ?? message.reference?.guildId ?? null;
+    const linkChannelId = referenced?.channelId ?? message.channelId ?? message.reference?.channelId ?? null;
+    const linkMessageId = referenced?.id ?? message.reference?.messageId ?? null;
+    const link = linkGuildId && linkChannelId && linkMessageId
+        ? `https://discord.com/channels/${linkGuildId}/${linkChannelId}/${linkMessageId}`
+        : null;
+    const linkLine = link ? `[View replied message](${link})` : '';
+
+    const embedLines = [];
+    if (header) embedLines.push(header);
+    if (quoteBlock) embedLines.push(quoteBlock);
+    if (linkLine) embedLines.push(linkLine);
+
+    const sanitizeReply = createMentionSanitizer(message);
+    const contentHeader = header ? sanitizeReply(header) : '';
+    const contentLines = [];
+    if (contentHeader) contentLines.push(contentHeader);
+    if (quoteBlock) contentLines.push(quoteBlock);
+    if (linkLine) contentLines.push(linkLine);
+
+    return {
+        embedLines,
+        contentLines
+    };
+}
+
 function formatReactionSummary(message) {
     const cache = message?.reactions?.cache ?? message?.reactions ?? null;
     if (!cache || typeof cache.size !== 'number' || cache.size === 0) {
@@ -801,7 +914,7 @@ function buildHeaderLine(message) {
     return parts.filter(Boolean).join(' • ');
 }
 
-function buildPresentation({ message }) {
+async function buildPresentation({ message }) {
     const sanitizeMentions = createMentionSanitizer(message);
     const rawContent = message.content ?? '';
     const hasYouTube = isYouTubeUrl(rawContent);
@@ -814,6 +927,10 @@ function buildPresentation({ message }) {
     const pollForEmbed = pollCombined.length ? sanitizeMentions(trunc(pollCombined, 1024)) : '';
     const pollForContent = pollCombined.length ? sanitizeMentions(trunc(pollCombined, 1500)) : '';
 
+    const replyPresentation = await buildReplyPresentation(message);
+    const replyEmbedLines = replyPresentation?.embedLines ?? [];
+    const replyContentLines = replyPresentation?.contentLines ?? [];
+
     const stickerLines = message.stickers?.size
         ? message.stickers.map((sticker) => `🃏 Sticker: ${sticker.name}`).join('\n')
         : '';
@@ -822,6 +939,9 @@ function buildPresentation({ message }) {
 
     const headerLine = buildHeaderLine(message);
     const headerForContent = sanitizeMentions(headerLine);
+
+    const stickerMedia = collectStickerMedia(message);
+    const stickerUrls = stickerMedia.map((item) => item.url);
 
     const attachmentUrls = Array.from(message.attachments?.values?.() ?? [])
         .map(att => att?.url)
@@ -833,10 +953,16 @@ function buildPresentation({ message }) {
     const attachmentsForEmbed = nonGifAttachments.length
         ? sanitizeMentions(trunc(nonGifAttachments.join('\n'), 1024))
         : '';
+    const attachmentsForContent = nonGifAttachments.length
+        ? sanitizeMentions(trunc(nonGifAttachments.join('\n'), 800))
+        : '';
     const reactionSummary = formatReactionSummary(message);
     const reactionsForEmbed = reactionSummary ? sanitizeMentions(trunc(reactionSummary, 512)) : '';
 
+    const replyEmbedParts = replyEmbedLines.map((line) => sanitizeMentions(trunc(line, 1024))).filter(Boolean);
+
     const embedParts = [];
+    if (replyEmbedParts.length) embedParts.push(...replyEmbedParts);
     if (normalizedContent) embedParts.push(normalizedContent);
     if (pollForEmbed) embedParts.push(pollForEmbed);
     if (stickersForEmbed) embedParts.push(stickersForEmbed);
@@ -847,10 +973,12 @@ function buildPresentation({ message }) {
     const safeDescription = embedDescription.length ? trunc(embedDescription, 4096) : '';
 
     const media = extractMedia(message);
-    const uniqueMedia = [...new Set(media)];
+    const combinedMedia = [...new Set([...media, ...stickerUrls])];
+    const uniqueMedia = [...combinedMedia];
     const gifMedia = uniqueMedia.filter((url) => GIF_REGEX.test(url));
-    const nonGifMedia = uniqueMedia.filter((url) => !GIF_REGEX.test(url));
-    const embedImage = nonGifMedia.length ? nonGifMedia[0] : null;
+    const embedImage = uniqueMedia.find((url) => VIDEO_REGEX.test(url))
+        ?? uniqueMedia[0]
+        ?? null;
 
     const embedNeeded = Boolean(safeDescription || embedImage);
     const embedData = embedNeeded
@@ -860,6 +988,8 @@ function buildPresentation({ message }) {
         }
         : null;
 
+    const replyContent = replyContentLines.map((line) => sanitizeMentions(trunc(line, 1024))).filter(Boolean);
+
     return {
         hasYouTube,
         embedData,
@@ -867,9 +997,11 @@ function buildPresentation({ message }) {
         normalizedContent,
         pollForContent,
         stickersForContent,
+        attachmentsForContent,
         attachmentUrls: nonGifAttachments,
         media: uniqueMedia,
-        gifUrls: [...new Set([...gifAttachments, ...gifMedia])]
+        gifUrls: [...new Set([...gifAttachments, ...gifMedia])],
+        replyContent
     };
 }
 
@@ -883,27 +1015,28 @@ function resolveAvatar(message) {
     return message.member?.displayAvatarURL?.() || message.author?.displayAvatarURL?.() || null;
 }
 
-function buildEmbedForTarget({ presentation, bridgeId, targetGuildId }) {
+function buildEmbedForTarget({ presentation, bridgeId, targetGuildId, colorOverride }) {
     if (!presentation?.embedData) {
-        return null;
+        return { embed: null, color: null };
     }
     const embed = new EmbedBuilder(presentation.embedData);
-    const color = nextColorForGuild(bridgeId, targetGuildId);
-    if (color !== null) {
+    const reuseColor = typeof colorOverride === 'number' ? colorOverride : null;
+    const color = reuseColor ?? nextColorForGuild(bridgeId, targetGuildId);
+    if (color !== null && typeof embed.setColor === 'function') {
         embed.setColor(color);
     }
-    return embed;
+    return { embed, color: color ?? null };
 }
 
-function prepareSendPayload({ message, bridgeId, targetGuildId, presentation: basePresentation }) {
-    const presentation = basePresentation ?? buildPresentation({ message });
+async function prepareSendPayload({ message, bridgeId, targetGuildId, presentation: basePresentation }) {
+    const presentation = basePresentation ?? await buildPresentation({ message });
     const payload = {
         username: resolveUsername(message),
         avatarURL: resolveAvatar(message),
         allowedMentions: { parse: [] }
     };
 
-    const embed = buildEmbedForTarget({ presentation, bridgeId, targetGuildId });
+    const { embed, color } = buildEmbedForTarget({ presentation, bridgeId, targetGuildId, colorOverride: null });
     if (embed) {
         payload.embeds = [embed];
     } else {
@@ -914,37 +1047,57 @@ function prepareSendPayload({ message, bridgeId, targetGuildId, presentation: ba
         ? trunc(Array.from(new Set(presentation.gifUrls)).join('\n'), MAX_CONTENT_LENGTH)
         : '';
 
+    const baseContentParts = [];
+    if (presentation.replyContent?.length) {
+        baseContentParts.push(...presentation.replyContent);
+    }
+    if (presentation.headerForContent) {
+        baseContentParts.push(presentation.headerForContent);
+    }
+    if (presentation.pollForContent) {
+        baseContentParts.push(presentation.pollForContent);
+    }
+    if (presentation.stickersForContent) {
+        baseContentParts.push(presentation.stickersForContent);
+    }
+    if (presentation.attachmentsForContent) {
+        baseContentParts.push(presentation.attachmentsForContent);
+    }
+
     if (presentation.hasYouTube) {
         const youtubeContent = presentation.normalizedContent
             ? trunc(presentation.normalizedContent, MAX_CONTENT_LENGTH)
             : '';
-        if (youtubeContent.length === 0 && !presentation.media.length && !gifContent.length) {
-            return null;
-        }
-        const parts = [];
+        const parts = [...baseContentParts];
         if (youtubeContent.length) parts.push(youtubeContent);
         if (gifContent.length) parts.push(gifContent);
+        if (!presentation.media.length && !youtubeContent.length && !gifContent.length && !parts.length) {
+            return null;
+        }
         if (parts.length) {
-            payload.content = parts.join('\n');
+            payload.content = parts.join('\n\n');
         }
     } else if (gifContent.length) {
-        payload.content = gifContent;
+        const parts = [...baseContentParts, gifContent];
+        payload.content = parts.join('\n\n');
+    } else if (baseContentParts.length) {
+        payload.content = baseContentParts.join('\n\n');
     }
 
     if (!payload.embeds.length && !payload.content) {
         return null;
     }
 
-    return payload;
+    return { payload, color };
 }
 
-function prepareEditPayload({ message, bridgeId, targetGuildId, presentation: basePresentation }) {
-    const presentation = basePresentation ?? buildPresentation({ message });
+async function prepareEditPayload({ message, bridgeId, targetGuildId, presentation: basePresentation, colorOverride = null }) {
+    const presentation = basePresentation ?? await buildPresentation({ message });
     const payload = {
         allowedMentions: { parse: [] }
     };
 
-    const embed = buildEmbedForTarget({ presentation, bridgeId, targetGuildId });
+    const { embed } = buildEmbedForTarget({ presentation, bridgeId, targetGuildId, colorOverride });
     if (embed) {
         payload.embeds = [embed];
     } else {
@@ -955,16 +1108,40 @@ function prepareEditPayload({ message, bridgeId, targetGuildId, presentation: ba
         ? trunc(Array.from(new Set(presentation.gifUrls)).join('\n'), MAX_CONTENT_LENGTH)
         : '';
 
+    const baseContentParts = [];
+    if (presentation.replyContent?.length) {
+        baseContentParts.push(...presentation.replyContent);
+    }
+    if (presentation.headerForContent) {
+        baseContentParts.push(presentation.headerForContent);
+    }
+    if (presentation.pollForContent) {
+        baseContentParts.push(presentation.pollForContent);
+    }
+    if (presentation.stickersForContent) {
+        baseContentParts.push(presentation.stickersForContent);
+    }
+    if (presentation.attachmentsForContent) {
+        baseContentParts.push(presentation.attachmentsForContent);
+    }
+
     if (presentation.hasYouTube) {
         const youtubeContent = presentation.normalizedContent
             ? trunc(presentation.normalizedContent, MAX_CONTENT_LENGTH)
             : '';
-        const parts = [];
+        const parts = [...baseContentParts];
         if (youtubeContent.length) parts.push(youtubeContent);
         if (gifContent.length) parts.push(gifContent);
-        payload.content = parts.join('\n');
+        if (parts.length) {
+            payload.content = parts.join('\n\n');
+        } else if (!presentation.media.length) {
+            payload.content = '';
+        }
     } else if (gifContent.length) {
-        payload.content = gifContent;
+        const parts = [...baseContentParts, gifContent];
+        payload.content = parts.join('\n\n');
+    } else if (baseContentParts.length) {
+        payload.content = baseContentParts.join('\n\n');
     } else {
         payload.content = '';
     }
@@ -1017,7 +1194,8 @@ export async function init({ client, config, logger, db }) {
         originThreadId,
         targetChannelId,
         targetMessageId,
-        targetThreadId
+        targetThreadId,
+        color = null
     }) {
         if (!runtime.messageLinks.has(originalId)) {
             runtime.messageLinks.set(originalId, new Map());
@@ -1045,7 +1223,8 @@ export async function init({ client, config, logger, db }) {
         record.forwarded.set(key, {
             messageId: targetMessageId,
             channelId: targetChannelId,
-            threadId: targetThreadId ?? null
+            threadId: targetThreadId ?? null,
+            color: typeof color === 'number' ? color : null
         });
 
         if (targetMessageId) {
@@ -1102,13 +1281,14 @@ export async function init({ client, config, logger, db }) {
             const value = record.forwarded.get(key);
             if (!value) continue;
             if (typeof value === 'string') {
-                return { messageId: value, channelId: key, threadId: target.threadId ?? null };
+                return { messageId: value, channelId: key, threadId: target.threadId ?? null, color: null };
             }
             if (typeof value === 'object') {
                 const messageId = value.messageId ?? value.id ?? null;
                 const threadId = value.threadId ?? (target.threadId ?? null);
                 const channelId = value.channelId ?? key;
-                return { messageId, threadId, channelId };
+                const color = typeof value.color === 'number' ? value.color : null;
+                return { messageId, threadId, channelId, color };
             }
         }
         return null;
@@ -1144,16 +1324,17 @@ export async function init({ client, config, logger, db }) {
                 });
                 if (!targets.length) continue;
 
-                const presentation = buildPresentation({ message });
+                const presentation = await buildPresentation({ message });
 
                 for (const target of targets) {
-                    const payload = prepareSendPayload({
+                    const result = await prepareSendPayload({
                         message,
                         bridgeId,
                         targetGuildId: target.guildId,
                         presentation
                     });
-                    if (!payload) continue;
+                    if (!result) continue;
+                    const { payload, color } = result;
                     try {
                         const webhook = getWebhookClient(target);
                         const threadOptions = await resolveThreadOptions({
@@ -1179,7 +1360,8 @@ export async function init({ client, config, logger, db }) {
                             originThreadId,
                             targetChannelId: target.channelId,
                             targetMessageId: sent?.id ?? null,
-                            targetThreadId: responseThreadId
+                            targetThreadId: responseThreadId,
+                            color
                         });
                     } catch (err) {
                         logger?.warn?.(`[rainbow-bridge] Failed to forward message ${message.id} to ${target.channelId}: ${err?.message ?? err}`);
@@ -1212,7 +1394,7 @@ export async function init({ client, config, logger, db }) {
                 }
                 return true;
             });
-            const presentation = buildPresentation({ message });
+            const presentation = await buildPresentation({ message });
 
             for (const target of targets) {
                 const forwarded = getForwardedRecord(record, target);
@@ -1221,11 +1403,12 @@ export async function init({ client, config, logger, db }) {
                 const threadId = forwarded?.threadId ?? target.threadId ?? null;
                 try {
                     const webhook = getWebhookClient(target);
-                    const payload = prepareEditPayload({
+                    const payload = await prepareEditPayload({
                         message,
                         bridgeId,
                         targetGuildId: target.guildId,
-                        presentation
+                        presentation,
+                        colorOverride: forwarded?.color ?? null
                     });
                     const editPayload = threadId ? { ...payload, threadId } : payload;
                     await webhook.editMessage(targetMessageId, editPayload);

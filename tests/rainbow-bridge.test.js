@@ -38,7 +38,7 @@ vi.mock('discord.js', async () => {
     return { ...actual, WebhookClient: MockWebhookClient };
 });
 
-import { WebhookClient, ChannelType, Collection } from 'discord.js';
+import { WebhookClient, ChannelType, Collection, StickerFormatType } from 'discord.js';
 import { init, normalizeRainbowBridgeConfig, refresh } from '../src/features/rainbow-bridge/index.js';
 import { createDb } from '../src/core/db.js';
 
@@ -144,8 +144,10 @@ function makeMessage({
     guildId = 'guild-1',
     content = 'Hello world',
     id = `msg-${Math.random().toString(36).slice(2)}`,
-    webhookId = null
+    webhookId = null,
+    stickers = null
 } = {}) {
+    const stickerCollection = stickers ?? new Collection();
     return {
         id,
         guild: { id: guildId, name: `Guild ${guildId}` },
@@ -153,7 +155,7 @@ function makeMessage({
         content,
         attachments: new Map(),
         embeds: [],
-        stickers: { size: 0, map: () => [] },
+        stickers: stickerCollection,
         author: { bot: false, username: 'User', id: 'user-1' },
         member: { displayName: 'User', displayAvatarURL: () => null },
         webhookId,
@@ -232,7 +234,9 @@ describe('rainbow bridge refresh hook', () => {
         const [targetWebhook] = WebhookClient.instances;
         expect(targetWebhook.send).toHaveBeenCalledTimes(1);
         const payload = targetWebhook.send.mock.calls[0]?.[0] ?? {};
-        expect((payload.content ?? '') || (payload.embeds?.[0]?.data?.description ?? '')).toContain('Second wave');
+        const embedDescription = payload.embeds?.[0]?.data?.description ?? payload.embeds?.[0]?.description ?? '';
+        const combined = embedDescription || payload.content || '';
+        expect(combined).toContain('Second wave');
 
         await emit('messageCreate', makeMessage({
             id: 'msg-mirror',
@@ -317,7 +321,7 @@ describe('rainbow bridge refresh hook', () => {
         expect(description).not.toContain('<@');
     });
 
-    it('treats gif-only messages as content without advancing the embed color', async () => {
+    it('forwards gif attachments as media while continuing the color rotation', async () => {
         config.rainbowBridge.bridges.test = {
             name: 'Gif Bridge',
             channels: [
@@ -336,15 +340,130 @@ describe('rainbow bridge refresh hook', () => {
         const bridgeWebhook = WebhookClient.instances.find(instance => instance.id === '222');
         expect(bridgeWebhook).toBeTruthy();
         const gifPayload = bridgeWebhook.send.mock.calls[0]?.[0] ?? {};
-        expect(gifPayload.embeds).toEqual([]);
+        const gifEmbedRaw = gifPayload.embeds?.[0] ?? {};
+        const gifEmbed = gifEmbedRaw?.data ?? gifEmbedRaw;
+        const gifImageUrl = gifEmbed?.image?.url ?? gifEmbedRaw?.image?.url ?? null;
+        expect(gifImageUrl).toBe('https://cdn.example.com/animated.gif');
         expect(gifPayload.content).toContain('animated.gif');
+        const gifColor = gifEmbed?.color ?? gifEmbedRaw?.color ?? null;
+        expect(gifColor).toBe(0xFF0000);
 
         const textMessage = makeMessage({ content: 'Hello after gif' });
         await emit('messageCreate', textMessage);
 
         const textPayload = bridgeWebhook.send.mock.calls[1]?.[0] ?? {};
         const color = textPayload.embeds?.[0]?.data?.color ?? textPayload.embeds?.[0]?.color ?? null;
-        expect(color).toBe(0xFF0000);
+        expect(color).toBe(0xFFA500);
+    });
+
+    it('formats replies with logging-style quoting and attribution', async () => {
+        config.rainbowBridge.bridges.test = {
+            name: 'Reply Bridge',
+            channels: [
+                { guildId: 'guild-1', channelId: 'chan-a', webhookUrl: 'https://discord.com/api/webhooks/111/tokenA' },
+                { guildId: 'guild-2', channelId: 'chan-b', webhookUrl: 'https://discord.com/api/webhooks/222/tokenB' }
+            ]
+        };
+        config.rainbowBridge = normalizeRainbowBridgeConfig(config.rainbowBridge);
+        refresh();
+
+        const referenced = makeMessage({ id: 'msg-ref', content: 'Original message content' });
+        referenced.member = { displayName: 'Original Member' };
+        referenced.author = { id: 'user-ref', username: 'OriginalUser', globalName: 'Origin' };
+
+        const reply = makeMessage({ content: 'Reply body' });
+        reply.reference = { messageId: referenced.id, channelId: referenced.channel.id, guildId: referenced.guild.id };
+        reply.fetchReference = vi.fn(async () => referenced);
+        reply.mentions = {
+            members: new Map(),
+            users: new Map(),
+            roles: new Map(),
+            channels: new Map(),
+            repliedUser: referenced.author
+        };
+
+        await emit('messageCreate', reply);
+
+        const bridgeWebhook = WebhookClient.instances.find(instance => instance.id === '222');
+        expect(bridgeWebhook).toBeTruthy();
+        const payload = bridgeWebhook.send.mock.calls[0]?.[0] ?? {};
+        const embedRaw = payload.embeds?.[0] ?? {};
+        const embedData = embedRaw?.data ?? embedRaw;
+        const description = embedData?.description ?? '';
+        expect(description).toContain('↩️ Replying to **Original Member**');
+        expect(description).toContain('> Original message content');
+        expect(description).toContain('View replied message');
+        expect(payload.content).toContain('↩️ Replying to **Original Member**');
+        expect(payload.content).toContain('> Original message content');
+    });
+
+    it('renders stickers as images with attribution', async () => {
+        config.rainbowBridge.bridges.test = {
+            name: 'Sticker Bridge',
+            channels: [
+                { guildId: 'guild-1', channelId: 'chan-a', webhookUrl: 'https://discord.com/api/webhooks/111/tokenA' },
+                { guildId: 'guild-2', channelId: 'chan-b', webhookUrl: 'https://discord.com/api/webhooks/222/tokenB' }
+            ]
+        };
+        config.rainbowBridge = normalizeRainbowBridgeConfig(config.rainbowBridge);
+        refresh();
+
+        const stickers = new Collection([
+            ['sticker-1', { id: 'sticker-1', name: 'Party Parrot', format: StickerFormatType.Lottie, url: 'https://cdn.discordapp.com/stickers/sticker-1.json' }]
+        ]);
+        const stickerMessage = makeMessage({ content: '', stickers });
+
+        await emit('messageCreate', stickerMessage);
+
+        const bridgeWebhook = WebhookClient.instances.find(instance => instance.id === '222');
+        expect(bridgeWebhook).toBeTruthy();
+        const payload = bridgeWebhook.send.mock.calls[0]?.[0] ?? {};
+        const embedRaw = payload.embeds?.[0] ?? {};
+        const embedData = embedRaw?.data ?? embedRaw;
+        expect(embedData?.image?.url ?? embedRaw?.image?.url).toBe('https://cdn.discordapp.com/stickers/sticker-1.png?size=320');
+        const description = embedData?.description ?? '';
+        expect(description).toContain('🃏 Sticker: Party Parrot');
+    });
+
+    it('retains embed colors when mirrored messages are edited', async () => {
+        config.rainbowBridge.bridges.test = {
+            name: 'Edit Bridge',
+            channels: [
+                { guildId: 'guild-1', channelId: 'chan-a', webhookUrl: 'https://discord.com/api/webhooks/111/tokenA' },
+                { guildId: 'guild-2', channelId: 'chan-b', webhookUrl: 'https://discord.com/api/webhooks/222/tokenB' }
+            ]
+        };
+        config.rainbowBridge = normalizeRainbowBridgeConfig(config.rainbowBridge);
+        refresh();
+
+        const originalMessage = makeMessage({ content: 'Base content' });
+        originalMessage.reactions = { cache: new Map() };
+
+        await emit('messageCreate', originalMessage);
+
+        const bridgeWebhook = WebhookClient.instances.find(instance => instance.id === '222');
+        expect(bridgeWebhook).toBeTruthy();
+        const initialPayload = bridgeWebhook.send.mock.calls[0]?.[0] ?? {};
+        const initialColor = initialPayload.embeds?.[0]?.data?.color ?? initialPayload.embeds?.[0]?.color ?? null;
+        expect(initialColor).toBe(0xFF0000);
+
+        const sentInfo = await bridgeWebhook.send.mock.results[0]?.value;
+        expect(sentInfo?.id).toBeTruthy();
+
+        const updatedMessage = {
+            ...originalMessage,
+            content: 'Edited content',
+            reactions: originalMessage.reactions,
+            attachments: originalMessage.attachments,
+            embeds: []
+        };
+
+        await emit('messageUpdate', originalMessage, updatedMessage);
+
+        expect(bridgeWebhook.editMessage).toHaveBeenCalledTimes(1);
+        const editPayload = bridgeWebhook.editMessage.mock.calls[0]?.[1] ?? {};
+        const editColor = editPayload.embeds?.[0]?.data?.color ?? editPayload.embeds?.[0]?.color ?? null;
+        expect(editColor).toBe(initialColor);
     });
 
     it('mirrors emoji reactions across linked channels', async () => {
