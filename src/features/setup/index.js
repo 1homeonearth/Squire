@@ -308,10 +308,10 @@ async function buildHomeView({ client, config, guildOptions }) {
             inline: false
         },
         {
-            name: 'Experience',
+            name: 'Experience Points',
             value: (() => {
                 const guildEntries = Object.values(config.experience ?? {});
-                if (!guildEntries.length) return 'No XP rules configured yet.';
+                if (!guildEntries.length) return 'No experience points rules configured yet.';
                 const ruleCount = guildEntries.reduce((total, entry) => total + (entry?.rules?.length ?? 0), 0);
                 return `${ruleCount} rule set${ruleCount === 1 ? '' : 's'} across ${guildEntries.length} server${guildEntries.length === 1 ? '' : 's'}.`;
             })(),
@@ -380,7 +380,7 @@ async function buildHomeView({ client, config, guildOptions }) {
         { label: 'Rainbow Bridge', value: 'rainbow', description: 'Link channels across servers.' },
         { label: 'Autobouncer', value: 'autobouncer', description: 'Manage autoban keywords and notification channel.' },
         { label: 'Embed builder', value: 'embed', description: 'Design reusable embeds with buttons.' },
-        { label: 'Experience', value: 'experience', description: 'Configure XP rules and leaderboards.' }
+        { label: 'Experience Points', value: 'experience', description: 'Configure experience points rules and leaderboards.' }
     );
     components.push(new ActionRowBuilder().addComponents(moduleMenu));
 
@@ -585,6 +585,33 @@ async function handleHomeInteraction({ interaction, config, client, logger, home
                 availableGuildIds: available
             });
             panelStore.set(homeKey, { message, guildOptions, view: 'module', module: 'embed' });
+            return;
+        }
+
+        if (target === 'experience') {
+            const available = Array.isArray(config.mainServerIds) ? config.mainServerIds : [];
+            const initialGuildId = available[0] ?? null;
+            const selectedRuleId = initialGuildId
+                ? (config.experience?.[initialGuildId]?.activeRuleId
+                    ?? config.experience?.[initialGuildId]?.rules?.[0]?.id
+                    ?? null)
+                : null;
+            const view = await experienceSetup.buildView({
+                config,
+                client,
+                guildId: initialGuildId,
+                availableGuildIds: available,
+                selectedRuleId
+            });
+            const message = await interaction.update(view);
+            panelStore.set(moduleKey, {
+                message,
+                guildId: initialGuildId,
+                mode: 'overview',
+                context: selectedRuleId ? { ruleId: selectedRuleId } : {},
+                availableGuildIds: available
+            });
+            panelStore.set(homeKey, { message, guildOptions, view: 'module', module: 'experience' });
             return;
         }
     }
