@@ -16,6 +16,8 @@ const DEFAULT_VOICE_AMOUNT = 10;
 const DEFAULT_REACTION_AMOUNT = 5;
 const DEFAULT_REACTION_COOLDOWN = 30;
 const DEFAULT_STAT_COOLDOWN = 60;
+export const DEFAULT_LEVEL_UP_MESSAGE = '{user} reached level {level}! 🎉';
+const MAX_LEVEL_UP_MESSAGE_LENGTH = 1800;
 
 function cloneObject(value) {
     if (typeof structuredClone === 'function') {
@@ -76,6 +78,7 @@ const DEFAULT_RULE_TEMPLATE = Object.freeze({
     channelBlacklist: [],
     roleBlacklist: [],
     levelUpChannelId: null,
+    levelUpMessage: DEFAULT_LEVEL_UP_MESSAGE,
     leaderboard: {
         customUrl: '',
         autoChannelId: null,
@@ -113,6 +116,7 @@ function normalizeRule(rule) {
     clone.channelBlacklist = normalizeIdArray(clone.channelBlacklist);
     clone.roleBlacklist = normalizeIdArray(clone.roleBlacklist);
     clone.levelUpChannelId = normalizeId(clone.levelUpChannelId);
+    clone.levelUpMessage = normalizeLevelUpMessage(clone.levelUpMessage);
     clone.leaderboard = normalizeLeaderboardSettings(clone.leaderboard);
     clone.blacklist = normalizeGeneralBlacklist(clone.blacklist);
     return clone;
@@ -241,6 +245,61 @@ function normalizeNumber(value, fallback, min, max) {
     return Math.round(clamped * 100) / 100;
 }
 
+function normalizeLevelUpMessage(value) {
+    if (typeof value !== 'string') {
+        return DEFAULT_LEVEL_UP_MESSAGE;
+    }
+    const trimmed = value.trim();
+    if (!trimmed) {
+        return DEFAULT_LEVEL_UP_MESSAGE;
+    }
+    return trimmed.slice(0, MAX_LEVEL_UP_MESSAGE_LENGTH);
+}
+
+function xpForLevel(level) {
+    const safeLevel = Math.max(0, Math.floor(level));
+    return 5 * safeLevel * safeLevel + 50 * safeLevel + 100;
+}
+
+export function getLevelFromXp(xp) {
+    let remaining = Math.max(0, Math.floor(Number(xp) || 0));
+    let level = 0;
+    while (remaining >= xpForLevel(level)) {
+        remaining -= xpForLevel(level);
+        level += 1;
+        if (level > 1000) break; // guard against runaway loops
+    }
+    return level;
+}
+
+function renderLevelUpMessage(template, context) {
+    const base = normalizeLevelUpMessage(template);
+    const replacements = new Map([
+        ['{user}', context.userMention ?? ''],
+        ['{userTag}', context.userTag ?? ''],
+        ['{displayName}', context.displayName ?? ''],
+        ['{level}', String(context.level ?? '')],
+        ['{previousLevel}', String(context.previousLevel ?? '')],
+        ['{levelDelta}', String(context.levelDelta ?? '')],
+        ['{xp}', String(context.totalXp ?? '')],
+        ['{guild}', context.guildName ?? ''],
+        ['{channel}', context.channelMention ?? '']
+    ]);
+
+    let result = base;
+    for (const [token, value] of replacements.entries()) {
+        if (value === undefined || value === null) continue;
+        result = result.replaceAll(token, value);
+    }
+
+    const trimmed = result.trim();
+    if (!trimmed) {
+        return DEFAULT_LEVEL_UP_MESSAGE;
+    }
+
+    return trimmed.slice(0, MAX_LEVEL_UP_MESSAGE_LENGTH);
+}
+
 function getActiveRule(config, guildId) {
     if (!guildId) return null;
     const guildConfig = config.experience?.[guildId];
@@ -330,6 +389,7 @@ function shouldTrackVoiceState(state, rule) {
 
 export function init({ client, logger: _logger, config, db }) {
     let activeConfig = { ...config, experience: normalizeExperienceConfig(config.experience) };
+    const logger = _logger;
 
     const profiles = db ? ensureCollection(db, 'experience_profiles', { indices: ['guildId', 'userId'] }) : null;
     const messageCooldowns = new Map();
@@ -365,16 +425,169 @@ export function init({ client, logger: _logger, config, db }) {
         return entry.xp;
     }
 
-    function addXp(guildId, userId, baseAmount, rule) {
-        if (!profiles) return 0;
+    async function resolveGuild(guildId) {
+        if (!guildId) return null;
+        let guild = client.guilds.cache.get(guildId) ?? null;
+        if (!guild && typeof client.guilds.fetch === 'function') {
+            guild = await client.guilds.fetch(guildId).catch(() => null);
+        }
+        return guild;
+    }
+
+    async function resolveTextChannel({ channel, channelId, guildId }) {
+        const candidate = channel && typeof channel.isTextBased === 'function' && channel.isTextBased()
+            ? channel
+            : null;
+        if (candidate) return candidate;
+
+        const targetId = channelId ?? null;
+        if (!targetId) return null;
+
+        let guild = channel?.guild ?? null;
+        if (!guild && guildId) {
+            guild = await resolveGuild(guildId);
+        }
+        if (guild) {
+            let fromGuild = guild.channels?.cache?.get(targetId) ?? null;
+            if (!fromGuild && typeof guild.channels?.fetch === 'function') {
+                fromGuild = await guild.channels.fetch(targetId).catch(() => null);
+            }
+            if (fromGuild?.isTextBased?.()) {
+                return fromGuild;
+            }
+        }
+
+        let fetched = null;
+        if (client.channels && typeof client.channels.fetch === 'function') {
+            fetched = await client.channels.fetch(targetId).catch(() => null);
+        }
+        if (fetched?.isTextBased?.()) {
+            return fetched;
+        }
+
+        return null;
+    }
+
+    async function handleLevelUp({ guildId, userId, rule, context, totalXp, previousXp, level, levelDelta, xpAwarded }) {
+        try {
+            const guild = context?.guild ?? await resolveGuild(guildId);
+            const member = context?.member ?? await guild?.members?.fetch?.(userId).catch(() => null);
+            const user = member?.user ?? await client.users?.fetch?.(userId).catch(() => null);
+            const mention = `<@${userId}>`;
+            const displayName = member?.displayName
+                ?? user?.globalName
+                ?? user?.username
+                ?? userId;
+            const userTag = user?.tag ?? user?.username ?? userId;
+
+            let announceChannel = null;
+            if (rule?.levelUpChannelId) {
+                announceChannel = await resolveTextChannel({ channelId: rule.levelUpChannelId, guildId });
+            }
+            if (!announceChannel) {
+                announceChannel = await resolveTextChannel({
+                    channel: context?.channel ?? null,
+                    channelId: context?.channelId ?? null,
+                    guildId
+                });
+            }
+            if (!announceChannel) {
+                announceChannel = await resolveTextChannel({
+                    channelId: context?.originChannelId ?? null,
+                    guildId
+                });
+            }
+
+            const channelMention = announceChannel
+                ? `<#${announceChannel.id}>`
+                : (context?.channelId ? `<#${context.channelId}>` : '');
+
+            const rendered = renderLevelUpMessage(rule?.levelUpMessage, {
+                userMention: mention,
+                userTag,
+                displayName,
+                level,
+                previousLevel: Math.max(0, level - levelDelta),
+                levelDelta,
+                totalXp,
+                guildName: guild?.name ?? '',
+                channelMention
+            });
+
+            let success = null;
+            if (announceChannel) {
+                try {
+                    await announceChannel.send({
+                        content: rendered,
+                        allowedMentions: { users: [userId] }
+                    });
+                    success = true;
+                } catch (err) {
+                    logger?.warn?.(`[xp] Failed to announce level ${level} for ${userId} in ${guildId}: ${err?.message ?? err}`);
+                    success = false;
+                }
+            }
+
+            let statusNote = '';
+            if (success === false) {
+                statusNote = ' (announcement failed)';
+            } else if (success === null) {
+                statusNote = ' (announcement skipped)';
+            }
+            logger?.info?.(`[xp] ${userTag} reached level ${level} in ${guildId}${statusNote}`);
+
+            client.emit('squire:experience:log', {
+                type: 'level-up',
+                guildId,
+                userId,
+                level,
+                levelDelta,
+                totalXp,
+                xpAwarded,
+                previousXp,
+                ruleId: rule?.id ?? null,
+                ruleName: rule?.name ?? null,
+                channelId: announceChannel?.id ?? null,
+                sourceChannelId: context?.originChannelId ?? context?.channelId ?? null,
+                sourceType: context?.type ?? null,
+                message: rendered,
+                success
+            });
+        } catch (err) {
+            logger?.warn?.(`[xp] Level-up handling failed for ${guildId}/${userId}: ${err?.message ?? err}`);
+        }
+    }
+
+    async function awardExperience({ guildId, userId, baseAmount, rule, context }) {
+        if (!profiles) return;
         const awarded = calculateAward(baseAmount, rule);
-        if (awarded <= 0) return 0;
-        const entry = fetchOrCreateProfile(guildId, userId);
-        if (!entry) return 0;
-        entry.xp = Math.max(0, (entry.xp || 0) + awarded);
-        entry.updatedAt = Date.now();
-        profiles.update(entry);
-        return awarded;
+        if (awarded <= 0) return;
+        try {
+            const entry = fetchOrCreateProfile(guildId, userId);
+            if (!entry) return;
+            const previousXp = entry.xp || 0;
+            const previousLevel = getLevelFromXp(previousXp);
+            entry.xp = Math.max(0, previousXp + awarded);
+            entry.updatedAt = Date.now();
+            profiles.update(entry);
+            const newLevel = getLevelFromXp(entry.xp);
+            const levelDelta = newLevel - previousLevel;
+            if (levelDelta > 0) {
+                await handleLevelUp({
+                    guildId,
+                    userId,
+                    rule,
+                    context,
+                    totalXp: entry.xp,
+                    previousXp,
+                    level: newLevel,
+                    levelDelta,
+                    xpAwarded: awarded
+                });
+            }
+        } catch (err) {
+            logger?.warn?.(`[xp] Failed to award XP for ${guildId}/${userId}: ${err?.message ?? err}`);
+        }
     }
 
     function resetProfile(guildId, userId) {
@@ -428,7 +641,20 @@ export function init({ client, logger: _logger, config, db }) {
         const elapsedMs = now - (entry.lastAwardAt ?? entry.startedAt ?? now);
         const minutes = Math.floor(elapsedMs / 60000);
         if (minutes > 0) {
-            addXp(guildId, state.id, minutes * (rule.voice?.amountPerMinute ?? DEFAULT_VOICE_AMOUNT), rule);
+            const baseAmount = minutes * (rule.voice?.amountPerMinute ?? DEFAULT_VOICE_AMOUNT);
+            void awardExperience({
+                guildId,
+                userId: state.id,
+                baseAmount,
+                rule,
+                context: {
+                    type: 'voice',
+                    guild: state.guild ?? null,
+                    member: state.member ?? null,
+                    originChannelId: state.channelId ?? entry.channelId ?? null,
+                    channelId: rule.levelUpChannelId ?? null
+                }
+            });
         }
         cleanupVoiceSession(key);
     }
@@ -452,7 +678,21 @@ export function init({ client, logger: _logger, config, db }) {
             return;
         }
         updateCooldown(messageCooldowns, key, now);
-        addXp(message.guildId, message.author.id, rule.message.amount, rule);
+        await awardExperience({
+            guildId: message.guildId,
+            userId: message.author.id,
+            baseAmount: rule.message.amount,
+            rule,
+            context: {
+                type: 'message',
+                channel: message.channel ?? null,
+                channelId: message.channel?.id ?? null,
+                originChannelId: message.channel?.id ?? null,
+                guild: message.guild ?? null,
+                member,
+                messageId: message.id
+            }
+        });
     });
 
     client.on('messageReactionAdd', async (reaction, user) => {
@@ -479,7 +719,22 @@ export function init({ client, logger: _logger, config, db }) {
             return;
         }
         updateCooldown(reactionCooldowns, key, now);
-        addXp(message.guildId, user.id, rule.reaction.amount, rule);
+        await awardExperience({
+            guildId: message.guildId,
+            userId: user.id,
+            baseAmount: rule.reaction.amount,
+            rule,
+            context: {
+                type: 'reaction',
+                channel: message.channel ?? null,
+                channelId: message.channel?.id ?? null,
+                originChannelId: message.channel?.id ?? null,
+                guild: message.guild ?? guild ?? null,
+                member,
+                messageId: message.id,
+                emoji: reaction.emoji?.toString?.() ?? null
+            }
+        });
     });
 
     client.on('voiceStateUpdate', (oldState, newState) => {
@@ -508,7 +763,20 @@ export function init({ client, logger: _logger, config, db }) {
             }
             const minutes = Math.floor(elapsedMs / 60000);
             if (minutes <= 0) continue;
-            addXp(guildId, userId, minutes * (rule.voice?.amountPerMinute ?? DEFAULT_VOICE_AMOUNT), rule);
+            const baseAmount = minutes * (rule.voice?.amountPerMinute ?? DEFAULT_VOICE_AMOUNT);
+            void awardExperience({
+                guildId,
+                userId,
+                baseAmount,
+                rule,
+                context: {
+                    type: 'voice',
+                    guild: null,
+                    member: null,
+                    originChannelId: entry.channelId ?? null,
+                    channelId: rule.levelUpChannelId ?? null
+                }
+            });
             entry.lastAwardAt = now;
         }
     }, 30000).unref?.();

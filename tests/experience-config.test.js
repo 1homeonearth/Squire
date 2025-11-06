@@ -4,7 +4,9 @@ import { describe, it, expect } from 'vitest';
 import {
     normalizeExperienceConfig,
     normalizeGuildConfig,
-    normalizeRule
+    normalizeRule,
+    DEFAULT_LEVEL_UP_MESSAGE,
+    getLevelFromXp
 } from '../src/features/experience/index.js';
 
 describe('experience config normalisation', () => {
@@ -32,6 +34,7 @@ describe('experience config normalisation', () => {
             channelBlacklist: ['1234567890', 'invalid', '1234567890'],
             roleBlacklist: ['<@&456789012345>', 'notid'],
             levelUpChannelId: '<#999999999999>',
+            levelUpMessage: '  {user} leveled to {level}!  ',
             leaderboard: {
                 customUrl: ' example ',
                 autoChannelId: 'abc',
@@ -57,6 +60,7 @@ describe('experience config normalisation', () => {
         expect(rawRule.channelBlacklist).toEqual(['1234567890']);
         expect(rawRule.roleBlacklist).toEqual([]);
         expect(rawRule.levelUpChannelId).toBeNull();
+        expect(rawRule.levelUpMessage).toBe('{user} leveled to {level}!');
         expect(rawRule.leaderboard.autoChannelId).toBeNull();
         expect(rawRule.leaderboard.statCooldownSeconds).toBe(86400);
         expect(rawRule.blacklist.channels).toEqual([]);
@@ -68,5 +72,18 @@ describe('experience config normalisation', () => {
         const second = normalizeRule({ name: 'B' });
         const guild = normalizeGuildConfig({ rules: [first, second], activeRuleId: second.id });
         expect(guild.activeRuleId).toBe(second.id);
+    });
+
+    it('falls back to default level up message when missing', () => {
+        const normalized = normalizeRule({ levelUpMessage: '   ' });
+        expect(normalized.levelUpMessage).toBe(DEFAULT_LEVEL_UP_MESSAGE);
+    });
+
+    it('computes level thresholds correctly', () => {
+        expect(normalizeRule({}).levelUpMessage).toBeDefined();
+        expect(getLevelFromXp(0)).toBe(0);
+        expect(getLevelFromXp(99)).toBe(0);
+        expect(getLevelFromXp(100)).toBe(1);
+        expect(getLevelFromXp(255)).toBe(2);
     });
 });

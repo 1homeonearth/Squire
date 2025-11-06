@@ -22,7 +22,8 @@ import {
 import {
     normalizeExperienceConfig,
     normalizeGuildConfig,
-    normalizeRule
+    normalizeRule,
+    DEFAULT_LEVEL_UP_MESSAGE
 } from './index.js';
 
 const MAX_RULES = 10;
@@ -299,6 +300,15 @@ export function createExperienceSetup({ panelStore, saveConfig }) {
                     ),
                     new ActionRowBuilder().addComponents(
                         new TextInputBuilder()
+                        .setCustomId('levelUpMessage')
+                        .setLabel('Level up message (use {user}, {level}, {xp})')
+                        .setStyle(TextInputStyle.Paragraph)
+                        .setRequired(false)
+                        .setMaxLength(1800)
+                        .setValue(rule.levelUpMessage ?? DEFAULT_LEVEL_UP_MESSAGE)
+                    ),
+                    new ActionRowBuilder().addComponents(
+                        new TextInputBuilder()
                         .setCustomId('customUrl')
                         .setLabel('Leaderboard custom URL')
                         .setStyle(TextInputStyle.Short)
@@ -475,6 +485,7 @@ export function createExperienceSetup({ panelStore, saveConfig }) {
             } else if (type === 'general') {
                 const multiplier = interaction.fields.getTextInputValue('multiplier');
                 const levelChannel = interaction.fields.getTextInputValue('levelUpChannel');
+                const levelMessage = interaction.fields.getTextInputValue('levelUpMessage');
                 const customUrl = interaction.fields.getTextInputValue('customUrl');
                 const autoChannel = interaction.fields.getTextInputValue('autoChannel');
                 const statCooldown = interaction.fields.getTextInputValue('statCooldown');
@@ -483,6 +494,7 @@ export function createExperienceSetup({ panelStore, saveConfig }) {
                     rule.multiplier = Math.max(0.01, Math.min(100, Math.round(multiNum * 100) / 100));
                 }
                 rule.levelUpChannelId = cleanSnowflake(levelChannel) ?? null;
+                rule.levelUpMessage = cleanLevelUpMessage(levelMessage, rule.levelUpMessage);
                 rule.leaderboard.customUrl = (customUrl ?? '').trim().slice(0, 100);
                 rule.leaderboard.autoChannelId = cleanSnowflake(autoChannel) ?? null;
                 rule.leaderboard.statCooldownSeconds = updateNumbers(statCooldown, rule.leaderboard.statCooldownSeconds, 0, 86400);
@@ -522,6 +534,17 @@ function cleanSnowflake(value) {
     return /^\d{5,30}$/.test(normalized) ? normalized : null;
 }
 
+function cleanLevelUpMessage(value, fallback = DEFAULT_LEVEL_UP_MESSAGE) {
+    if (typeof value !== 'string') {
+        return fallback ?? DEFAULT_LEVEL_UP_MESSAGE;
+    }
+    const trimmed = value.trim();
+    if (!trimmed) {
+        return DEFAULT_LEVEL_UP_MESSAGE;
+    }
+    return trimmed.slice(0, 1800);
+}
+
 async function buildExperienceView({ config, client, guildId, availableGuildIds, selectedRuleId }) {
     const components = [];
     const guild = guildId ? await client.guilds.fetch(guildId).catch(() => null) : null;
@@ -546,6 +569,7 @@ async function buildExperienceView({ config, client, guildId, availableGuildIds,
     );
 
     if (activeRule) {
+        const levelMessagePreview = truncateName(activeRule.levelUpMessage || DEFAULT_LEVEL_UP_MESSAGE, 80);
         embed.addFields(
             {
                 name: 'Messages',
@@ -569,7 +593,7 @@ async function buildExperienceView({ config, client, guildId, availableGuildIds,
             },
             {
                 name: 'Leaderboard',
-                value: `Multiplier: **x${activeRule.multiplier.toFixed(2)}**\nLevel-up channel: ${formatMaybeChannel(guild, activeRule.levelUpChannelId)}\nAuto leaderboard: ${formatMaybeChannel(guild, activeRule.leaderboard.autoChannelId)}\nCustom URL: ${activeRule.leaderboard.customUrl || 'Not set'}\nShow avatar: **${activeRule.leaderboard.showAvatar ? 'Yes' : 'No'}**\nStack roles: **${activeRule.leaderboard.stackRoles ? 'Yes' : 'No'}**\nGive role on rejoin: **${activeRule.leaderboard.giveRoleOnJoin ? 'Yes' : 'No'}**\nStat cooldown: **${activeRule.leaderboard.statCooldownSeconds}s**`,
+                value: `Multiplier: **x${activeRule.multiplier.toFixed(2)}**\nLevel-up channel: ${formatMaybeChannel(guild, activeRule.levelUpChannelId)}\nLevel-up message: ${levelMessagePreview}\nAuto leaderboard: ${formatMaybeChannel(guild, activeRule.leaderboard.autoChannelId)}\nCustom URL: ${activeRule.leaderboard.customUrl || 'Not set'}\nShow avatar: **${activeRule.leaderboard.showAvatar ? 'Yes' : 'No'}**\nStack roles: **${activeRule.leaderboard.stackRoles ? 'Yes' : 'No'}**\nGive role on rejoin: **${activeRule.leaderboard.giveRoleOnJoin ? 'Yes' : 'No'}**\nStat cooldown: **${activeRule.leaderboard.statCooldownSeconds}s**`,
                 inline: false
             },
             {

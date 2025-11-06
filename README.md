@@ -251,6 +251,7 @@ Each bridge entry supports:
   - `multiplier` (number).
   - `channelBlacklist`/`roleBlacklist` (string ID arrays).
   - `levelUpChannelId` (string ID).
+  - `levelUpMessage` (string template; supports `{user}`, `{level}`, `{xp}`, `{channel}`).
   - `leaderboard` block (`customUrl`, `autoChannelId`, `showAvatar`, `stackRoles`, `giveRoleOnJoin`, `statCooldownSeconds`).
   - `blacklist` block containing `channels` and `categories` arrays used across all earning sources.
 - `activeRuleId` (string, optional): If omitted, the first rule is activated automatically.
@@ -327,6 +328,7 @@ Full example with explicit overrides:
           "resets": { "onLeave": true, "onBan": true },
           "multiplier": 1.0,
           "levelUpChannelId": "445566778899001122",
+          "levelUpMessage": "{user} just reached level {level}! 🎉",
           "leaderboard": { "autoChannelId": "556677889900112233" },
           "blacklist": { "channels": ["667788990011223344"], "categories": [] }
         }
