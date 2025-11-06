@@ -5,7 +5,8 @@
 
 import {
     WebhookClient,
-    EmbedBuilder
+    EmbedBuilder,
+    AuditLogEvent
 } from 'discord.js';
 import { isYouTubeUrl, prepareForNativeEmbed } from '../../lib/youtube.js';
 import { formatPollLines } from '../../lib/poll-format.js';
@@ -104,11 +105,147 @@ const nextColor = nextColorGen();
 // --- exported feature entrypoint ---
 export async function init({ client, config, logger }) {
     let loggingServerId = config.loggingServerId || null;
+    let loggingChannels = typeof config.loggingChannels === 'object' && config.loggingChannels
+        ? { ...config.loggingChannels }
+        : {};
+
+    const loggingGuildCache = { id: null, guild: null };
+
+    function formatUserLabel(user) {
+        if (!user) return 'Unknown';
+        const id = user.id ?? 'unknown';
+        const name = user.tag
+            ?? user.globalName
+            ?? user.username
+            ?? user.displayName
+            ?? id;
+        return `${name} (${id})`;
+    }
+
+    function formatGuildLabel(guild) {
+        const id = guild?.id ?? 'unknown';
+        const name = guild?.name ?? id;
+        return `${name} (${id})`;
+    }
+
+    function formatTimestampLabel(timestamp) {
+        if (!Number.isFinite(timestamp)) return null;
+        const unix = Math.floor(timestamp / 1000);
+        if (!Number.isFinite(unix)) return null;
+        return `<t:${unix}:f> (<t:${unix}:R>)`;
+    }
+
+    async function fetchLoggingGuild() {
+        if (!loggingServerId) return null;
+        if (loggingGuildCache.id === loggingServerId && loggingGuildCache.guild) {
+            return loggingGuildCache.guild;
+        }
+
+        let guild = client.guilds.cache.get(loggingServerId) ?? null;
+        if (!guild && typeof client.guilds.fetch === 'function') {
+            guild = await client.guilds.fetch(loggingServerId).catch(() => null);
+        }
+
+        if (guild) {
+            loggingGuildCache.id = loggingServerId;
+            loggingGuildCache.guild = guild;
+        }
+
+        return guild;
+    }
+
+    async function resolveLoggingChannel(channelId) {
+        if (!channelId) return null;
+        const guild = await fetchLoggingGuild();
+        if (!guild) return null;
+
+        let channel = guild.channels?.cache?.get(channelId) ?? null;
+        if (!channel && typeof guild.channels?.fetch === 'function') {
+            channel = await guild.channels.fetch(channelId).catch(() => null);
+        }
+
+        if (channel && typeof channel.isTextBased === 'function' && channel.isTextBased()) {
+            return channel;
+        }
+        return null;
+    }
+
+    async function sendModerationLog({ action, guild, targetUser, moderator, reason, contextChannel, extraLines = [] }) {
+        const modChannelId = loggingChannels?.moderation ?? null;
+        if (!loggingServerId || !modChannelId) return;
+
+        const channel = await resolveLoggingChannel(modChannelId);
+        if (!channel) return;
+
+        const guildLabel = formatGuildLabel(guild);
+        const header = `🛡️ **${guildLabel}** — ${action} → <#${modChannelId}>`;
+        const lines = [header];
+
+        lines.push(`• Target: ${formatUserLabel(targetUser)}`);
+        lines.push(`• Moderator: ${moderator ? formatUserLabel(moderator) : 'Unknown'}`);
+        if (contextChannel) {
+            lines.push(`• Channel: ${contextChannel}`);
+        }
+        if (reason) {
+            lines.push(`• Reason: ${reason}`);
+        }
+        if (Array.isArray(extraLines) && extraLines.length) {
+            for (const entry of extraLines) {
+                if (entry) {
+                    lines.push(entry);
+                }
+            }
+        }
+
+        const content = lines.join('\n');
+        try {
+            await channel.send({ content, allowedMentions: { parse: [] } });
+        } catch (err) {
+            logger?.warn?.(`[modlogs] Failed to send moderation log to ${modChannelId}: ${err?.message ?? err}`);
+        }
+    }
+
+    async function findRecentAuditLogEntry(guild, type, targetId, predicate = null) {
+        if (!guild || typeof guild.fetchAuditLogs !== 'function') {
+            return null;
+        }
+
+        try {
+            const logs = await guild.fetchAuditLogs({ limit: 5, type });
+            const entries = logs?.entries;
+            if (!entries || typeof entries.values !== 'function') {
+                return null;
+            }
+
+            const now = Date.now();
+            for (const entry of entries.values()) {
+                if (targetId && entry?.target?.id && entry.target.id !== targetId) continue;
+                if (predicate && !predicate(entry)) continue;
+                const created = entry?.createdTimestamp;
+                if (!Number.isFinite(created) || Math.abs(now - created) > 60_000) {
+                    continue;
+                }
+                return entry;
+            }
+        } catch (err) {
+            logger?.warn?.(`[modlogs] Audit log fetch failed in guild ${guild?.id ?? 'unknown'}: ${err?.message ?? err}`);
+        }
+
+        return null;
+    }
 
     client.on('squire:configUpdated', (nextConfig) => {
         try {
             const source = nextConfig && typeof nextConfig === 'object' ? nextConfig : config;
-            loggingServerId = source.loggingServerId || null;
+            const nextLoggingServerId = source.loggingServerId || null;
+            if (nextLoggingServerId !== loggingServerId) {
+                loggingServerId = nextLoggingServerId;
+                loggingGuildCache.id = null;
+                loggingGuildCache.guild = null;
+            }
+            loggingChannels = typeof source.loggingChannels === 'object' && source.loggingChannels
+                ? { ...source.loggingChannels }
+                : {};
         } catch {}
     });
 
@@ -392,6 +529,137 @@ export async function init({ client, config, logger }) {
             // keep the bot alive
             const logError = logger?.error?.bind(logger) ?? console.error;
             logError('[forwarder] messageCreate error:', e);
+        }
+    });
+
+    client.on('guildBanAdd', async (ban) => {
+        try {
+            const guild = ban?.guild ?? null;
+            const user = ban?.user ?? null;
+            if (!guild || !user) return;
+
+            const entry = await findRecentAuditLogEntry(guild, AuditLogEvent.MemberBanAdd, user.id);
+            const moderator = entry?.executor ?? null;
+            const reason = entry?.reason ?? ban?.reason ?? null;
+
+            await sendModerationLog({
+                action: 'Ban',
+                guild,
+                targetUser: user,
+                moderator,
+                reason
+            });
+        } catch (err) {
+            logger?.warn?.(`[modlogs] Failed to record ban: ${err?.message ?? err}`);
+        }
+    });
+
+    client.on('guildBanRemove', async (ban) => {
+        try {
+            const guild = ban?.guild ?? null;
+            const user = ban?.user ?? null;
+            if (!guild || !user) return;
+
+            const entry = await findRecentAuditLogEntry(guild, AuditLogEvent.MemberBanRemove, user.id);
+            const moderator = entry?.executor ?? null;
+            const reason = entry?.reason ?? ban?.reason ?? null;
+
+            await sendModerationLog({
+                action: 'Unban',
+                guild,
+                targetUser: user,
+                moderator,
+                reason
+            });
+        } catch (err) {
+            logger?.warn?.(`[modlogs] Failed to record unban: ${err?.message ?? err}`);
+        }
+    });
+
+    client.on('guildMemberRemove', async (member) => {
+        try {
+            const guild = member?.guild ?? null;
+            const user = member?.user ?? null;
+            if (!guild || !user) return;
+
+            const entry = await findRecentAuditLogEntry(guild, AuditLogEvent.MemberKick, user.id);
+            if (!entry) return; // likely a voluntary leave
+
+            const moderator = entry.executor ?? null;
+            const reason = entry.reason ?? null;
+
+            await sendModerationLog({
+                action: 'Kick',
+                guild,
+                targetUser: user,
+                moderator,
+                reason
+            });
+        } catch (err) {
+            logger?.warn?.(`[modlogs] Failed to record kick: ${err?.message ?? err}`);
+        }
+    });
+
+    client.on('guildMemberUpdate', async (oldMember, newMember) => {
+        try {
+            const guild = newMember?.guild ?? oldMember?.guild ?? null;
+            if (!guild || !newMember) return;
+
+            const oldTimeout = oldMember?.communicationDisabledUntilTimestamp ?? null;
+            const newTimeout = newMember.communicationDisabledUntilTimestamp ?? null;
+
+            if (oldTimeout === newTimeout) return;
+
+            const hasTimeout = Number.isFinite(newTimeout) && newTimeout > Date.now();
+            const clearedTimeout = Number.isFinite(oldTimeout) && !Number.isFinite(newTimeout);
+            if (!hasTimeout && !clearedTimeout) return;
+
+            const predicate = (entry) => {
+                const changes = entry?.changes;
+                if (!changes) return true;
+
+                if (typeof changes.values === 'function') {
+                    for (const change of changes.values()) {
+                        if (change?.key === 'communication_disabled_until') {
+                            return true;
+                        }
+                    }
+                    return false;
+                }
+
+                if (Array.isArray(changes)) {
+                    return changes.some(change => change?.key === 'communication_disabled_until');
+                }
+
+                return true;
+            };
+
+            const entry = await findRecentAuditLogEntry(guild, AuditLogEvent.MemberUpdate, newMember.id, predicate);
+            const moderator = entry?.executor ?? null;
+            const reason = entry?.reason ?? null;
+
+            if (hasTimeout) {
+                const expires = formatTimestampLabel(newTimeout);
+                const extra = expires ? [`• Expires: ${expires}`] : [];
+                await sendModerationLog({
+                    action: 'Timeout applied',
+                    guild,
+                    targetUser: newMember.user ?? newMember,
+                    moderator,
+                    reason,
+                    extraLines: extra
+                });
+            } else if (clearedTimeout) {
+                await sendModerationLog({
+                    action: 'Timeout cleared',
+                    guild,
+                    targetUser: newMember.user ?? newMember,
+                    moderator,
+                    reason
+                });
+            }
+        } catch (err) {
+            logger?.warn?.(`[modlogs] Failed to record timeout update: ${err?.message ?? err}`);
         }
     });
 
