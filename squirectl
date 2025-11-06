@@ -33,9 +33,15 @@ deploy_code() {
   run_as_squire "git -C '$APP_DIR' reset --hard origin/main"
 }
 
+commands_sync() {
+  echo "[squirectl] Syncing slash commands (wipe + deploy)..."
+  /opt/squire/app/scripts/commands-sync.sh
+  echo "[squirectl] Slash commands synced."
+}
+
 cmd_deploy()  { deploy_code; install_prod; render_config; systemctl restart "$UNIT"; systemctl --no-pager status "$UNIT" --lines=20; }
 cmd_start()   { deploy_code; install_prod; render_config; systemctl start   "$UNIT"; systemctl --no-pager status "$UNIT" --lines=20; }
-cmd_restart() { deploy_code; install_prod; render_config; systemctl restart "$UNIT"; systemctl --no-pager status "$UNIT" --lines=20; }
+cmd_restart() { deploy_code; install_prod; render_config; commands_sync; systemctl restart "$UNIT"; systemctl --no-pager status "$UNIT" --lines=20; }
 cmd_status()  { systemctl --no-pager status "$UNIT" --lines=50; journalctl -u "$UNIT" --no-pager -n 200 || true; }
 
 usage() { echo "Usage: $0 {deploy|start|restart|status}"; exit 2; }
