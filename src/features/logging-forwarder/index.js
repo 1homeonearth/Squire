@@ -10,6 +10,7 @@ import {
 } from 'discord.js';
 import { isYouTubeUrl, prepareForNativeEmbed } from '../../lib/youtube.js';
 import { formatPollLines } from '../../lib/poll-format.js';
+import { formatAsBlockQuote } from '../../lib/display.js';
 
 const RAINBOW = [0xFF0000, 0xFFA500, 0xFFFF00, 0x00FF00, 0x0000FF, 0x800080];
 
@@ -18,7 +19,6 @@ const trunc = (s, n) => (s && String(s).length > n ? String(s).slice(0, n - 1) +
 const sanitizeMentions = (text) => typeof text === 'string'
     ? text.replace(/<(@[!&]?|#)(\d+)>/g, '<$1\u200B$2>')
     : '';
-const formatAsBlockQuote = (text) => (text || '').split(/\r?\n/).map((line) => `> ${line}`).join('\n');
 
 async function resolveMemberContext(guild, user) {
     const fallbackName = user?.globalName ?? user?.username ?? user?.id ?? 'Unknown user';
