@@ -86,7 +86,17 @@ async function resolveLogChannel(guild, channelId) {
     return null;
 }
 
-function timestampContent(message) {
+function formatLogMessage(message, { includeTimestamp = true } = {}) {
+    if (!includeTimestamp) {
+        if (typeof message === 'string') {
+            return message;
+        }
+        if (message && typeof message === 'object') {
+            return { ...message };
+        }
+        return String(message ?? '');
+    }
+
     const unix = Math.floor(Date.now() / 1000);
     const tsTag = `<t:${unix}:f>`;
     if (typeof message === 'string') {
@@ -104,10 +114,11 @@ function timestampContent(message) {
     return `🕒 ${tsTag} • ${String(message ?? '')}`;
 }
 
-async function safeNotify(channel, message, logger) {
+async function safeNotify(channel, message, logger, options = {}) {
     if (!channel) return;
     try {
-        await channel.send(timestampContent(message));
+        const payload = formatLogMessage(message, options);
+        await channel.send(payload);
     } catch (err) {
         logger?.warn?.(`[autoban] Failed to notify in ${channel.id}: ${err?.message ?? err}`);
     }
@@ -122,13 +133,13 @@ async function safePlainChannelNotify(channel, content, logger) {
     }
 }
 
-async function safeWebhookNotify(urls, message, logger) {
+async function safeWebhookNotify(urls, message, logger, options = {}) {
     const list = Array.isArray(urls) ? urls : urls ? [urls] : [];
     await Promise.all(list.map(async (url) => {
         if (!url) return;
         try {
             const client = new WebhookClient({ url });
-            const payload = timestampContent({ content: typeof message === 'string' ? message : message?.content });
+            const payload = formatLogMessage({ content: typeof message === 'string' ? message : message?.content }, options);
             const normalized = typeof payload === 'string'
                 ? { content: payload }
                 : { ...payload };
@@ -249,7 +260,8 @@ export function init({ client, logger, config, db }) {
                     await safeWebhookNotify(
                         cfg.notifyWebhooks,
                         `⚠️ Could not auto-ban **${member.user?.tag ?? member.id}** in **${guildName}** (ID: ${guildId}) — missing permissions.`,
-                        logger
+                        logger,
+                        { includeTimestamp: false }
                     );
                 }
                 return;
@@ -289,7 +301,8 @@ export function init({ client, logger, config, db }) {
                 await safeWebhookNotify(
                     cfg.notifyWebhooks,
                     `🚫 Auto-banned **${member.user?.tag ?? member.id}** in **${guildName}** (ID: ${guildId}) — ${matchedSource === 'bio' ? 'profile bio' : 'name'} matched "${matchedTerm}".`,
-                    logger
+                    logger,
+                    { includeTimestamp: false }
                 );
             }
 
@@ -376,7 +389,8 @@ export function init({ client, logger, config, db }) {
                 await safeWebhookNotify(
                     cfg.notifyWebhooks,
                     `⚠️ Could not auto-kick **${displayName}** in **${guildName}** (ID: ${guildId}) — missing permissions; ${descriptor}.${joinedClause}`,
-                    logger
+                    logger,
+                    { includeTimestamp: false }
                 );
             }
             return;
@@ -413,7 +427,8 @@ export function init({ client, logger, config, db }) {
                 await safeWebhookNotify(
                     cfg.notifyWebhooks,
                     `👢 Auto-kicked **${displayName}** in **${guildName}** (ID: ${guildId}) — ${descriptor}.${joinedClause}`,
-                    logger
+                    logger,
+                    { includeTimestamp: false }
                 );
             }
         } catch (err) {
@@ -446,7 +461,8 @@ export function init({ client, logger, config, db }) {
                 await safeWebhookNotify(
                     cfg.notifyWebhooks,
                     `⚠️ Failed to auto-kick **${displayName}** in **${guildName}** (ID: ${guildId}) — ${errMessage}. ${descriptor}.${joinedClause}`,
-                    logger
+                    logger,
+                    { includeTimestamp: false }
                 );
             }
         }

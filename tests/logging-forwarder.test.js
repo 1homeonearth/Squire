@@ -28,7 +28,7 @@ vi.mock('discord.js', async () => {
     return { ...actual, WebhookClient: MockWebhookClient };
 });
 
-import { WebhookClient } from 'discord.js';
+import { AuditLogEvent, WebhookClient } from 'discord.js';
 import { init } from '../src/features/logging-forwarder/index.js';
 
 describe('logging forwarder reactions', () => {
@@ -36,6 +36,7 @@ describe('logging forwarder reactions', () => {
     let emit;
     let config;
     let logger;
+    let modChannel;
 
     beforeEach(async () => {
         const listeners = new Map();
@@ -51,7 +52,7 @@ describe('logging forwarder reactions', () => {
             },
             guilds: {
                 cache: new Map(),
-                fetch: vi.fn()
+                fetch: vi.fn(async (id) => client.guilds.cache.get(id) ?? null)
             }
         };
 
@@ -70,18 +71,38 @@ describe('logging forwarder reactions', () => {
             }
         };
 
+        modChannel = {
+            id: 'mod-channel',
+            isTextBased: vi.fn(() => true),
+            send: vi.fn(async () => {})
+        };
+
+        const loggingGuild = {
+            id: 'logging-1',
+            name: 'Logging Guild',
+            channels: {
+                cache: new Map([[modChannel.id, modChannel]]),
+                fetch: vi.fn(async (id) => (id === modChannel.id ? modChannel : null))
+            }
+        };
+
+        client.guilds.cache.set(loggingGuild.id, loggingGuild);
+
         config = {
             mapping: { 'guild-1': 'https://discord.com/api/webhooks/1/token' },
             excludeChannels: {},
             excludeCategories: {},
             forwardBots: true,
-            sampleRate: 1
+            sampleRate: 1,
+            loggingServerId: loggingGuild.id,
+            loggingChannels: { moderation: modChannel.id }
         };
 
         logger = {
             info: vi.fn(),
             verbose: vi.fn(),
-            error: vi.fn()
+            error: vi.fn(),
+            warn: vi.fn()
         };
 
         WebhookClient.instances.length = 0;
@@ -89,6 +110,7 @@ describe('logging forwarder reactions', () => {
         WebhookClient.failNextWith = null;
 
         await init({ client, config, logger });
+        modChannel.send.mockClear();
     });
 
     it('forwards reaction additions to the configured webhook', async () => {
@@ -200,6 +222,109 @@ describe('logging forwarder reactions', () => {
         await emit('messageReactionAdd', reaction, botUser);
 
         expect(WebhookClient.instances.length).toBe(0);
+    });
+
+    it('logs bans to the moderation channel with moderator details', async () => {
+        const auditEntry = {
+            target: { id: 'user-1' },
+            executor: { id: 'mod-1', tag: 'Mod#0001' },
+            createdTimestamp: Date.now(),
+            reason: 'Rule 1 violation'
+        };
+
+        const guild = {
+            id: 'guild-1',
+            name: 'Main Guild',
+            fetchAuditLogs: vi.fn(async (options) => {
+                expect(options.type).toBe(AuditLogEvent.MemberBanAdd);
+                return { entries: new Map([[auditEntry.executor.id, auditEntry]]) };
+            })
+        };
+
+        const user = { id: 'user-1', tag: 'Target#0001' };
+
+        await emit('guildBanAdd', { guild, user });
+
+        expect(modChannel.send).toHaveBeenCalledTimes(1);
+        const payload = modChannel.send.mock.calls[0]?.[0] ?? {};
+        expect(payload.content).toContain('Ban');
+        expect(payload.content).toContain('Main Guild');
+        expect(payload.content).toContain('Mod#0001');
+        expect(payload.content).toContain('Target#0001');
+        expect(payload.content).toContain('<#mod-channel>');
+    });
+
+    it('logs kicks when audit logs show a moderator action', async () => {
+        const auditEntry = {
+            target: { id: 'user-2' },
+            executor: { id: 'mod-2', username: 'KickMod' },
+            createdTimestamp: Date.now(),
+            reason: 'Cleanup'
+        };
+
+        const guild = {
+            id: 'guild-2',
+            name: 'Second Guild',
+            fetchAuditLogs: vi.fn(async (options) => {
+                expect(options.type).toBe(AuditLogEvent.MemberKick);
+                return { entries: new Map([[auditEntry.executor.id, auditEntry]]) };
+            })
+        };
+
+        const member = {
+            guild,
+            user: { id: 'user-2', tag: 'Kicked#1234' }
+        };
+
+        await emit('guildMemberRemove', member);
+
+        expect(modChannel.send).toHaveBeenCalledTimes(1);
+        const payload = modChannel.send.mock.calls[0]?.[0] ?? {};
+        expect(payload.content).toContain('Kick');
+        expect(payload.content).toContain('Second Guild');
+        expect(payload.content).toContain('KickMod');
+        expect(payload.content).toContain('Kicked#1234');
+    });
+
+    it('records timeout applications with expiry', async () => {
+        const future = Date.now() + 60_000;
+        const auditEntry = {
+            target: { id: 'user-3' },
+            executor: { id: 'mod-3', tag: 'TimeoutMod#9999' },
+            createdTimestamp: Date.now(),
+            reason: 'Cooling off',
+            changes: [{ key: 'communication_disabled_until' }]
+        };
+
+        const guild = {
+            id: 'guild-3',
+            name: 'Timeout Guild',
+            fetchAuditLogs: vi.fn(async (options) => {
+                expect(options.type).toBe(AuditLogEvent.MemberUpdate);
+                return { entries: new Map([[auditEntry.executor.id, auditEntry]]) };
+            })
+        };
+
+        const oldMember = {
+            guild,
+            communicationDisabledUntilTimestamp: null
+        };
+
+        const newMember = {
+            guild,
+            user: { id: 'user-3', tag: 'Muted#3333' },
+            communicationDisabledUntilTimestamp: future
+        };
+
+        await emit('guildMemberUpdate', oldMember, newMember);
+
+        expect(modChannel.send).toHaveBeenCalledTimes(1);
+        const payload = modChannel.send.mock.calls[0]?.[0] ?? {};
+        expect(payload.content).toContain('Timeout applied');
+        expect(payload.content).toContain('Timeout Guild');
+        expect(payload.content).toContain('TimeoutMod#9999');
+        expect(payload.content).toContain('Muted#3333');
+        expect(payload.content).toMatch(/Expires:/);
     });
 });
 
