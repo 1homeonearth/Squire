@@ -21,9 +21,141 @@ function trunc(str, max) {
     return value.length > max ? `${value.slice(0, max - 1)}…` : value;
 }
 
-const sanitizeMentions = (text) => typeof text === 'string'
-    ? text.replace(/<(@[!&]?|#)(\d+)>/g, '<$1\u200B$2>')
-    : '';
+const COLOR_COLLECTION_NAME = 'rainbow_bridge_colors';
+const GIF_REGEX = /\.(gif)(?:$|\?)/i;
+
+function createMentionSanitizer(message) {
+    const memberNames = new Map();
+    const userNames = new Map();
+    const roleNames = new Map();
+    const channelNames = new Map();
+
+    const collectEntries = (collection, handler) => {
+        if (!collection) return;
+        if (typeof collection.forEach === 'function') {
+            collection.forEach((value, key) => handler(value, key));
+            return;
+        }
+        if (typeof collection.values === 'function') {
+            for (const value of collection.values()) {
+                handler(value, value?.id ?? null);
+            }
+            return;
+        }
+        if (Array.isArray(collection)) {
+            for (const value of collection) {
+                handler(value, value?.id ?? null);
+            }
+        }
+    };
+
+    const mentions = message?.mentions ?? null;
+
+    collectEntries(mentions?.members ?? null, (member, key) => {
+        const id = member?.id ?? key;
+        if (!id) return;
+        const label = member?.displayName
+            ?? member?.nickname
+            ?? member?.user?.globalName
+            ?? member?.user?.username
+            ?? null;
+        if (label) {
+            memberNames.set(String(id), String(label));
+        }
+    });
+
+    collectEntries(mentions?.users ?? null, (user, key) => {
+        const id = user?.id ?? key;
+        if (!id) return;
+        const label = user?.globalName ?? user?.username ?? null;
+        if (label) {
+            userNames.set(String(id), String(label));
+        }
+    });
+
+    collectEntries(mentions?.roles ?? null, (role, key) => {
+        const id = role?.id ?? key;
+        if (!id) return;
+        const label = role?.name ?? null;
+        if (label) {
+            roleNames.set(String(id), String(label));
+        }
+    });
+
+    collectEntries(mentions?.channels ?? null, (channel, key) => {
+        const id = channel?.id ?? key;
+        if (!id) return;
+        const label = channel?.name ?? null;
+        if (label) {
+            channelNames.set(String(id), String(label));
+        }
+    });
+
+    const resolveMemberLabel = (id) => {
+        const key = String(id);
+        if (memberNames.has(key)) return memberNames.get(key);
+
+        const guildMember = message?.guild?.members?.cache?.get?.(key)
+            ?? message?.guild?.members?.resolve?.(key)
+            ?? null;
+        const fromGuild = guildMember?.displayName
+            ?? guildMember?.nickname
+            ?? guildMember?.user?.globalName
+            ?? guildMember?.user?.username
+            ?? null;
+        if (fromGuild) {
+            memberNames.set(key, String(fromGuild));
+            return memberNames.get(key);
+        }
+
+        const user = userNames.get(key)
+            ?? message?.client?.users?.cache?.get?.(key)?.globalName
+            ?? message?.client?.users?.cache?.get?.(key)?.username
+            ?? null;
+        if (user) {
+            const label = String(user);
+            memberNames.set(key, label);
+            return label;
+        }
+
+        const fallback = `user-${key}`;
+        memberNames.set(key, fallback);
+        return fallback;
+    };
+
+    const resolveRoleLabel = (id) => {
+        const key = String(id);
+        if (roleNames.has(key)) return roleNames.get(key);
+        const role = message?.guild?.roles?.cache?.get?.(key)
+            ?? message?.guild?.roles?.resolve?.(key)
+            ?? null;
+        const label = role?.name ?? `role-${key}`;
+        roleNames.set(key, label);
+        return label;
+    };
+
+    const resolveChannelLabel = (id) => {
+        const key = String(id);
+        if (channelNames.has(key)) return channelNames.get(key);
+        const channel = message?.guild?.channels?.cache?.get?.(key)
+            ?? message?.guild?.channels?.resolve?.(key)
+            ?? null;
+        const label = channel?.name ?? `channel-${key}`;
+        channelNames.set(key, label);
+        return label;
+    };
+
+    return (text) => {
+        if (typeof text !== 'string' || !text.length) {
+            return '';
+        }
+
+        let output = text.replace(/<@!?([0-9]+)>/g, (_match, id) => `@${resolveMemberLabel(id)}`);
+        output = output.replace(/<@&([0-9]+)>/g, (_match, id) => `@${resolveRoleLabel(id)}`);
+        output = output.replace(/<#([0-9]+)>/g, (_match, id) => `#${resolveChannelLabel(id)}`);
+        return output;
+    };
+}
 
 function formatChannelLabel(channel, fallbackId) {
     if (!channel) {
@@ -43,20 +175,9 @@ function formatChannelLabel(channel, fallbackId) {
     return name ? `**#${name}**` : '';
 }
 
-function nextColorGen() {
-    const perBridge = new Map();
-    return (bridgeId) => {
-        const prev = perBridge.get(bridgeId) ?? -1;
-        const next = (prev + 1) % RAINBOW.length;
-        perBridge.set(bridgeId, next);
-        return RAINBOW[next];
-    };
-}
-
-const nextColor = nextColorGen();
-
 const LINK_COLLECTION_NAME = 'rainbow_bridge_links';
 const DELETE_SUPPRESS_TIMEOUT = 30_000;
+const GLOBAL_COLOR_KEY = '__global__';
 
 const runtime = {
     config: null,
@@ -73,6 +194,8 @@ const runtime = {
     threadMirrors: new Map(),
     db: null,
     linkCollection: null,
+    colorCollection: null,
+    colorState: new Map(),
     suppressedDeletes: new Set()
 };
 
@@ -195,6 +318,79 @@ function getLinkCollection() {
         runtime.linkCollection = ensureCollection(runtime.db, LINK_COLLECTION_NAME, { indices: ['originalId', 'bridgeId'] });
     }
     return runtime.linkCollection;
+}
+
+function getColorCollection() {
+    if (!runtime.db) return null;
+    if (!runtime.colorCollection) {
+        runtime.colorCollection = ensureCollection(runtime.db, COLOR_COLLECTION_NAME, { indices: ['bridgeId', 'guildId'] });
+    }
+    return runtime.colorCollection;
+}
+
+function resolveColorKey(bridgeId, guildId) {
+    if (!bridgeId) return null;
+    const bridgeKey = String(bridgeId);
+    const guildKey = guildId ? String(guildId) : GLOBAL_COLOR_KEY;
+    return `${bridgeKey}:${guildKey}`;
+}
+
+function persistColorEntry(bridgeId, guildId, index) {
+    const collection = getColorCollection();
+    if (!collection) return;
+    const bridgeKey = String(bridgeId);
+    const guildKey = guildId ? String(guildId) : GLOBAL_COLOR_KEY;
+    let doc = collection.findOne({ bridgeId: bridgeKey, guildId: guildKey });
+    if (!doc) {
+        collection.insert({ bridgeId: bridgeKey, guildId: guildKey, colorIndex: index });
+        return;
+    }
+    doc.colorIndex = index;
+    collection.update(doc);
+}
+
+function ensureColorEntry(bridgeId, guildId) {
+    const key = resolveColorKey(bridgeId, guildId);
+    if (!key) return null;
+    if (!runtime.colorState.has(key)) {
+        let index = -1;
+        const collection = getColorCollection();
+        if (collection) {
+            const bridgeKey = String(bridgeId);
+            const guildKey = guildId ? String(guildId) : GLOBAL_COLOR_KEY;
+            const doc = collection.findOne({ bridgeId: bridgeKey, guildId: guildKey });
+            if (doc && Number.isInteger(doc.colorIndex)) {
+                index = Number(doc.colorIndex);
+            }
+        }
+        runtime.colorState.set(key, { index });
+    }
+    return runtime.colorState.get(key);
+}
+
+function nextColorForGuild(bridgeId, guildId) {
+    const entry = ensureColorEntry(bridgeId, guildId);
+    if (!entry) return null;
+    const prevIndex = Number.isInteger(entry.index) ? Number(entry.index) : -1;
+    const nextIndex = (prevIndex + 1) % RAINBOW.length;
+    entry.index = nextIndex;
+    persistColorEntry(bridgeId, guildId, nextIndex);
+    return RAINBOW[nextIndex];
+}
+
+function hydratePersistedColors() {
+    runtime.colorState = new Map();
+    const collection = getColorCollection();
+    if (!collection) return;
+    const docs = collection.find() ?? [];
+    for (const doc of docs) {
+        const bridgeId = doc?.bridgeId ? String(doc.bridgeId) : null;
+        const guildId = doc?.guildId ? String(doc.guildId) : null;
+        if (!bridgeId || !guildId) continue;
+        const key = `${bridgeId}:${guildId}`;
+        const index = Number.isInteger(doc?.colorIndex) ? Number(doc.colorIndex) : -1;
+        runtime.colorState.set(key, { index });
+    }
 }
 
 function suppressDeletion(messageId) {
@@ -605,7 +801,8 @@ function buildHeaderLine(message) {
     return parts.filter(Boolean).join(' • ');
 }
 
-function buildPresentation({ bridgeId, message }) {
+function buildPresentation({ message }) {
+    const sanitizeMentions = createMentionSanitizer(message);
     const rawContent = message.content ?? '';
     const hasYouTube = isYouTubeUrl(rawContent);
     const preparedContent = hasYouTube ? prepareForNativeEmbed(rawContent) : rawContent;
@@ -629,9 +826,12 @@ function buildPresentation({ bridgeId, message }) {
     const attachmentUrls = Array.from(message.attachments?.values?.() ?? [])
         .map(att => att?.url)
         .filter(Boolean);
+    const uniqueAttachments = [...new Set(attachmentUrls)];
+    const gifAttachments = uniqueAttachments.filter(url => GIF_REGEX.test(url));
+    const nonGifAttachments = uniqueAttachments.filter(url => !GIF_REGEX.test(url));
 
-    const attachmentsForEmbed = attachmentUrls.length
-        ? sanitizeMentions(trunc(attachmentUrls.join('\n'), 1024))
+    const attachmentsForEmbed = nonGifAttachments.length
+        ? sanitizeMentions(trunc(nonGifAttachments.join('\n'), 1024))
         : '';
     const reactionSummary = formatReactionSummary(message);
     const reactionsForEmbed = reactionSummary ? sanitizeMentions(trunc(reactionSummary, 512)) : '';
@@ -646,30 +846,30 @@ function buildPresentation({ bridgeId, message }) {
     const embedDescription = embedParts.join('\n\n').trim();
     const safeDescription = embedDescription.length ? trunc(embedDescription, 4096) : '';
 
-    const embed = new EmbedBuilder()
-        .setColor(nextColor(bridgeId));
-
-    if (safeDescription.length) {
-        embed.setDescription(safeDescription);
-    } else {
-        embed.setDescription('\u200B');
-    }
-
     const media = extractMedia(message);
-    if (media.length) {
-        const preferred = media.find(url => /\.(gif|mp4|webm)(?:$|\?)/i.test(url)) || media[0];
-        embed.setImage(preferred);
-    }
+    const uniqueMedia = [...new Set(media)];
+    const gifMedia = uniqueMedia.filter((url) => GIF_REGEX.test(url));
+    const nonGifMedia = uniqueMedia.filter((url) => !GIF_REGEX.test(url));
+    const embedImage = nonGifMedia.length ? nonGifMedia[0] : null;
+
+    const embedNeeded = Boolean(safeDescription || embedImage);
+    const embedData = embedNeeded
+        ? {
+            description: safeDescription || '\u200B',
+            ...(embedImage ? { image: { url: embedImage } } : {})
+        }
+        : null;
 
     return {
         hasYouTube,
-        embed,
+        embedData,
         headerForContent,
         normalizedContent,
         pollForContent,
         stickersForContent,
-        attachmentUrls,
-        media
+        attachmentUrls: nonGifAttachments,
+        media: uniqueMedia,
+        gifUrls: [...new Set([...gifAttachments, ...gifMedia])]
     };
 }
 
@@ -683,42 +883,88 @@ function resolveAvatar(message) {
     return message.member?.displayAvatarURL?.() || message.author?.displayAvatarURL?.() || null;
 }
 
-function prepareSendPayload({ message, bridgeId }) {
-    const presentation = buildPresentation({ bridgeId, message });
+function buildEmbedForTarget({ presentation, bridgeId, targetGuildId }) {
+    if (!presentation?.embedData) {
+        return null;
+    }
+    const embed = new EmbedBuilder(presentation.embedData);
+    const color = nextColorForGuild(bridgeId, targetGuildId);
+    if (color !== null) {
+        embed.setColor(color);
+    }
+    return embed;
+}
+
+function prepareSendPayload({ message, bridgeId, targetGuildId, presentation: basePresentation }) {
+    const presentation = basePresentation ?? buildPresentation({ message });
     const payload = {
         username: resolveUsername(message),
         avatarURL: resolveAvatar(message),
-        allowedMentions: { parse: [] },
-        embeds: [presentation.embed]
+        allowedMentions: { parse: [] }
     };
+
+    const embed = buildEmbedForTarget({ presentation, bridgeId, targetGuildId });
+    if (embed) {
+        payload.embeds = [embed];
+    } else {
+        payload.embeds = [];
+    }
+
+    const gifContent = presentation.gifUrls?.length
+        ? trunc(Array.from(new Set(presentation.gifUrls)).join('\n'), MAX_CONTENT_LENGTH)
+        : '';
 
     if (presentation.hasYouTube) {
         const youtubeContent = presentation.normalizedContent
             ? trunc(presentation.normalizedContent, MAX_CONTENT_LENGTH)
             : '';
-        if (youtubeContent.length === 0 && !presentation.media.length) {
+        if (youtubeContent.length === 0 && !presentation.media.length && !gifContent.length) {
             return null;
         }
-        if (youtubeContent.length) {
-            payload.content = youtubeContent;
+        const parts = [];
+        if (youtubeContent.length) parts.push(youtubeContent);
+        if (gifContent.length) parts.push(gifContent);
+        if (parts.length) {
+            payload.content = parts.join('\n');
         }
+    } else if (gifContent.length) {
+        payload.content = gifContent;
+    }
+
+    if (!payload.embeds.length && !payload.content) {
+        return null;
     }
 
     return payload;
 }
 
-function prepareEditPayload({ message, bridgeId }) {
-    const presentation = buildPresentation({ bridgeId, message });
+function prepareEditPayload({ message, bridgeId, targetGuildId, presentation: basePresentation }) {
+    const presentation = basePresentation ?? buildPresentation({ message });
     const payload = {
-        allowedMentions: { parse: [] },
-        embeds: [presentation.embed]
+        allowedMentions: { parse: [] }
     };
+
+    const embed = buildEmbedForTarget({ presentation, bridgeId, targetGuildId });
+    if (embed) {
+        payload.embeds = [embed];
+    } else {
+        payload.embeds = [];
+    }
+
+    const gifContent = presentation.gifUrls?.length
+        ? trunc(Array.from(new Set(presentation.gifUrls)).join('\n'), MAX_CONTENT_LENGTH)
+        : '';
 
     if (presentation.hasYouTube) {
         const youtubeContent = presentation.normalizedContent
             ? trunc(presentation.normalizedContent, MAX_CONTENT_LENGTH)
             : '';
-        payload.content = youtubeContent;
+        const parts = [];
+        if (youtubeContent.length) parts.push(youtubeContent);
+        if (gifContent.length) parts.push(gifContent);
+        payload.content = parts.join('\n');
+    } else if (gifContent.length) {
+        payload.content = gifContent;
     } else {
         payload.content = '';
     }
@@ -737,10 +983,13 @@ export async function init({ client, config, logger, db }) {
     runtime.mirroredMessageIds = new Set();
     runtime.threadMirrors = new Map();
     runtime.linkCollection = null;
+    runtime.colorCollection = null;
+    runtime.colorState = new Map();
     runtime.suppressedDeletes = new Set();
     runtime.dirty = true;
 
     hydratePersistedLinks();
+    hydratePersistedColors();
 
     config.rainbowBridge = normalizeRainbowBridgeConfig(config.rainbowBridge);
     rebuildState();
@@ -895,10 +1144,16 @@ export async function init({ client, config, logger, db }) {
                 });
                 if (!targets.length) continue;
 
-                const payload = prepareSendPayload({ message, bridgeId });
-                if (!payload) continue;
+                const presentation = buildPresentation({ message });
 
                 for (const target of targets) {
+                    const payload = prepareSendPayload({
+                        message,
+                        bridgeId,
+                        targetGuildId: target.guildId,
+                        presentation
+                    });
+                    if (!payload) continue;
                     try {
                         const webhook = getWebhookClient(target);
                         const threadOptions = await resolveThreadOptions({
@@ -957,7 +1212,7 @@ export async function init({ client, config, logger, db }) {
                 }
                 return true;
             });
-            const payload = prepareEditPayload({ message, bridgeId });
+            const presentation = buildPresentation({ message });
 
             for (const target of targets) {
                 const forwarded = getForwardedRecord(record, target);
@@ -966,6 +1221,12 @@ export async function init({ client, config, logger, db }) {
                 const threadId = forwarded?.threadId ?? target.threadId ?? null;
                 try {
                     const webhook = getWebhookClient(target);
+                    const payload = prepareEditPayload({
+                        message,
+                        bridgeId,
+                        targetGuildId: target.guildId,
+                        presentation
+                    });
                     const editPayload = threadId ? { ...payload, threadId } : payload;
                     await webhook.editMessage(targetMessageId, editPayload);
                 } catch (err) {

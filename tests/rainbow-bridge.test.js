@@ -1,4 +1,7 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
+import fs from 'node:fs';
+import os from 'node:os';
+import path from 'node:path';
 
 vi.mock('discord.js', async () => {
     const actual = await vi.importActual('discord.js');
@@ -37,6 +40,20 @@ vi.mock('discord.js', async () => {
 
 import { WebhookClient, ChannelType, Collection } from 'discord.js';
 import { init, normalizeRainbowBridgeConfig, refresh } from '../src/features/rainbow-bridge/index.js';
+import { createDb } from '../src/core/db.js';
+
+async function createTempDb() {
+    const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'squire-rainbow-'));
+    const dbPath = path.join(tmp, 'db.json');
+    const db = await createDb(dbPath);
+    const cleanup = () => new Promise((resolve) => {
+        db.close(() => {
+            fs.rmSync(tmp, { recursive: true, force: true });
+            resolve();
+        });
+    });
+    return { db, cleanup };
+}
 
 describe('normalizeRainbowBridgeConfig', () => {
     it('normalizes per-server forms and derives active channels', () => {
@@ -144,6 +161,30 @@ function makeMessage({
     };
 }
 
+function createTestClient() {
+    const listeners = new Map();
+    const channelCache = new Map();
+    const client = {
+        on(event, handler) {
+            const existing = listeners.get(event) ?? [];
+            existing.push(handler);
+            listeners.set(event, existing);
+        },
+        channels: {
+            cache: channelCache,
+            fetch: vi.fn(async (id) => channelCache.get(id) ?? null)
+        },
+        user: { id: 'bot-1' }
+    };
+    const emit = async (event, ...args) => {
+        const handlers = listeners.get(event) ?? [];
+        for (const handler of handlers) {
+            await handler(...args);
+        }
+    };
+    return { client, emit, channelCache };
+}
+
 describe('rainbow bridge refresh hook', () => {
     let client;
     let emit;
@@ -151,27 +192,9 @@ describe('rainbow bridge refresh hook', () => {
     let logger;
 
     beforeEach(async () => {
-        const listeners = new Map();
-        const channelCache = new Map();
-        client = {
-            on(event, handler) {
-                const existing = listeners.get(event) ?? [];
-                existing.push(handler);
-                listeners.set(event, existing);
-            },
-            channels: {
-                cache: channelCache,
-                fetch: vi.fn(async (id) => channelCache.get(id) ?? null)
-            },
-            user: { id: 'bot-1' }
-        };
-        emit = async (event, ...args) => {
-            const handlers = listeners.get(event) ?? [];
-            for (const handler of handlers) {
-                await handler(...args);
-            }
-        };
-
+        const setup = createTestClient();
+        client = setup.client;
+        emit = setup.emit;
         config = { rainbowBridge: { bridges: {} } };
         logger = {
             info: vi.fn(),
@@ -255,6 +278,73 @@ describe('rainbow bridge refresh hook', () => {
         const editPayload = bridgeWebhook.editMessage.mock.calls[0]?.[1] ?? {};
         const editDescription = editPayload.embeds?.[0]?.data?.description ?? editPayload.embeds?.[0]?.description ?? '';
         expect(editDescription).toContain('**Reactions:** 🔥 ×1');
+    });
+
+    it('replaces user mentions with nicknames in forwarded embeds', async () => {
+        config.rainbowBridge.bridges.test = {
+            name: 'Mention Bridge',
+            channels: [
+                { guildId: 'guild-1', channelId: 'chan-a', webhookUrl: 'https://discord.com/api/webhooks/111/tokenA' },
+                { guildId: 'guild-2', channelId: 'chan-b', webhookUrl: 'https://discord.com/api/webhooks/222/tokenB' }
+            ]
+        };
+        config.rainbowBridge = normalizeRainbowBridgeConfig(config.rainbowBridge);
+        refresh();
+
+        const member = {
+            id: '123',
+            displayName: 'Cool Kid',
+            user: { id: '123', username: 'User123', globalName: 'GlobalUser' },
+            displayAvatarURL: () => null
+        };
+
+        const message = makeMessage({ content: 'Hey <@123>' });
+        message.mentions = {
+            members: new Map([[member.id, member]]),
+            users: new Map([[member.id, member.user]]),
+            roles: new Map(),
+            channels: new Map()
+        };
+        message.guild.members = { cache: new Map([[member.id, member]]) };
+
+        await emit('messageCreate', message);
+
+        const bridgeWebhook = WebhookClient.instances.find(instance => instance.id === '222');
+        expect(bridgeWebhook).toBeTruthy();
+        const payload = bridgeWebhook.send.mock.calls[0]?.[0] ?? {};
+        const description = payload.embeds?.[0]?.data?.description ?? payload.embeds?.[0]?.description ?? '';
+        expect(description).toContain('@Cool Kid');
+        expect(description).not.toContain('<@');
+    });
+
+    it('treats gif-only messages as content without advancing the embed color', async () => {
+        config.rainbowBridge.bridges.test = {
+            name: 'Gif Bridge',
+            channels: [
+                { guildId: 'guild-1', channelId: 'chan-a', webhookUrl: 'https://discord.com/api/webhooks/111/tokenA' },
+                { guildId: 'guild-2', channelId: 'chan-b', webhookUrl: 'https://discord.com/api/webhooks/222/tokenB' }
+            ]
+        };
+        config.rainbowBridge = normalizeRainbowBridgeConfig(config.rainbowBridge);
+        refresh();
+
+        const gifMessage = makeMessage({ content: '' });
+        gifMessage.attachments.set('gif', { url: 'https://cdn.example.com/animated.gif' });
+
+        await emit('messageCreate', gifMessage);
+
+        const bridgeWebhook = WebhookClient.instances.find(instance => instance.id === '222');
+        expect(bridgeWebhook).toBeTruthy();
+        const gifPayload = bridgeWebhook.send.mock.calls[0]?.[0] ?? {};
+        expect(gifPayload.embeds).toEqual([]);
+        expect(gifPayload.content).toContain('animated.gif');
+
+        const textMessage = makeMessage({ content: 'Hello after gif' });
+        await emit('messageCreate', textMessage);
+
+        const textPayload = bridgeWebhook.send.mock.calls[1]?.[0] ?? {};
+        const color = textPayload.embeds?.[0]?.data?.color ?? textPayload.embeds?.[0]?.color ?? null;
+        expect(color).toBe(0xFF0000);
     });
 
     it('mirrors emoji reactions across linked channels', async () => {
@@ -426,5 +516,59 @@ describe('rainbow bridge refresh hook', () => {
         const deleteArgs = bulkDelete.mock.calls[0]?.[0] ?? [];
         expect(deleteArgs).toHaveLength(3);
         expect(interaction.editReply).toHaveBeenCalledTimes(1);
+    });
+
+    it('persists embed color progression per guild using the database', async () => {
+        const { db, cleanup } = await createTempDb();
+
+        try {
+            const { client: firstClient, emit: emitFirst } = createTestClient();
+            const persistentConfig = {
+                rainbowBridge: {
+                    bridges: {
+                        persistent: {
+                            name: 'Persistent',
+                            channels: [
+                                { guildId: 'guild-1', channelId: 'chan-a', webhookUrl: 'https://discord.com/api/webhooks/111/tokenA' },
+                                { guildId: 'guild-2', channelId: 'chan-b', webhookUrl: 'https://discord.com/api/webhooks/222/tokenB' }
+                            ]
+                        }
+                    }
+                }
+            };
+            const persistentLogger = { info: vi.fn(), warn: vi.fn(), error: vi.fn() };
+
+            await init({ client: firstClient, config: persistentConfig, logger: persistentLogger, db });
+            refresh();
+
+            WebhookClient.instances.length = 0;
+            WebhookClient.messageCounter = 0;
+
+            await emitFirst('messageCreate', makeMessage({ content: 'First persistent message' }));
+
+            const firstWebhook = WebhookClient.instances.find(instance => instance.id === '222');
+            expect(firstWebhook).toBeTruthy();
+            const firstPayload = firstWebhook.send.mock.calls[0]?.[0] ?? {};
+            const firstColor = firstPayload.embeds?.[0]?.data?.color ?? firstPayload.embeds?.[0]?.color ?? null;
+            expect(firstColor).toBe(0xFF0000);
+
+            const { client: secondClient, emit: emitSecond } = createTestClient();
+
+            WebhookClient.instances.length = 0;
+            WebhookClient.messageCounter = 0;
+
+            await init({ client: secondClient, config: persistentConfig, logger: persistentLogger, db });
+            refresh();
+
+            await emitSecond('messageCreate', makeMessage({ content: 'Second persistent message' }));
+
+            const secondWebhook = WebhookClient.instances.find(instance => instance.id === '222');
+            expect(secondWebhook).toBeTruthy();
+            const secondPayload = secondWebhook.send.mock.calls[0]?.[0] ?? {};
+            const secondColor = secondPayload.embeds?.[0]?.data?.color ?? secondPayload.embeds?.[0]?.color ?? null;
+            expect(secondColor).toBe(0xFFA500);
+        } finally {
+            await cleanup();
+        }
     });
 });
