@@ -510,7 +510,7 @@ export function createExperienceSetup({ panelStore, saveConfig }) {
         }
     }
 
-    return { prepareConfig, handleInteraction };
+    return { prepareConfig, handleInteraction, buildView: buildExperienceView };
 }
 
 function cleanSnowflake(value) {
@@ -530,8 +530,8 @@ async function buildExperienceView({ config, client, guildId, availableGuildIds,
     const activeRule = rules.find(rule => rule.id === selectedRuleId) ?? rules[0] ?? null;
 
     const embed = new EmbedBuilder()
-    .setTitle('Experience configuration')
-    .setDescription('Manage XP rules, rewards, and leaderboards for this server.')
+    .setTitle('Experience Points configuration')
+    .setDescription('Manage experience points rules, rewards, and leaderboards for this server.')
     .addFields(
         {
             name: 'Server',

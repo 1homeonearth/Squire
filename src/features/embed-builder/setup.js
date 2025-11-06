@@ -31,6 +31,7 @@ const COLOR_OPTIONS = [
 ];
 
 const BUTTON_LIMIT = 5;
+const DESCRIPTION_MAX_LENGTH = 4000;
 
 export function createEmbedBuilderSetup({ panelStore, saveConfig, fetchGuild }) {
     function prepareConfig(config) {
@@ -188,7 +189,7 @@ export function createEmbedBuilderSetup({ panelStore, saveConfig, fetchGuild }) 
                             .setLabel('Embed description (supports Markdown)')
                             .setStyle(TextInputStyle.Paragraph)
                             .setRequired(false)
-                            .setMaxLength(4096)
+                            .setMaxLength(DESCRIPTION_MAX_LENGTH)
                             .setValue(embedConfig.embed.description ?? '')
                         )
                     );
@@ -380,7 +381,7 @@ export function createEmbedBuilderSetup({ panelStore, saveConfig, fetchGuild }) 
 
             if (interaction.customId === 'setup:embed:descriptionModal') {
                 const raw = interaction.fields.getTextInputValue('setup:embed:descriptionInput') ?? '';
-                embedConfig.embed.description = sanitizeText(raw, 4096);
+                embedConfig.embed.description = sanitizeText(raw, DESCRIPTION_MAX_LENGTH);
                 saveConfig(config, logger);
                 await interaction.reply({ content: 'Embed content updated.', ephemeral: true });
                 await refreshFromStore();
@@ -685,7 +686,7 @@ function normalizeEmbedBuilder(value) {
     normalized.embed = {
         color: resolveColor(incomingEmbed.color) ?? DEFAULT_COLOR,
         title: sanitizeText(incomingEmbed.title, 256),
-        description: sanitizeText(incomingEmbed.description, 4096)
+        description: sanitizeText(incomingEmbed.description, DESCRIPTION_MAX_LENGTH)
     };
     normalized.buttons = Array.isArray(value.buttons)
         ? value.buttons
