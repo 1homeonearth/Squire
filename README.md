@@ -199,6 +199,170 @@ Always export new secret values into the unit environment before invoking any `s
 
    The process logs its status to stdout and gracefully handles `SIGINT`/`SIGTERM`.
 
+## Setup configuration guide
+
+Follow these steps to create a `config.json` that the `/setup` module can read and update safely:
+
+1. **Render a working file** — run `node scripts/render-config.mjs` after exporting the required environment variables. The script combines `config.sample.json` with any existing `config.json`, resolves `$ENV{VAR}` placeholders (including JSON strings for nested objects/arrays), writes the result atomically to `config.json`, and exits if any variables are missing.
+2. **Locate the config** — the bot always reads `config.json` in the repository root. `/setup` mutations write back to this file via `saveConfig(...)`, so treat it as the single source of truth after rendering. Keep `config.sample.json` checked in with placeholder values only.
+3. **Prime global metadata** — populate `loggingServerId`, `mainServerIds`, and any per-environment overrides (sampling rates, excluded channels, etc.). These keys gate which guilds appear inside `/setup` selectors.
+4. **Fill module sections** — the `setup` factories normalise data at boot, but supplying the right shape keeps validation warnings away. Required/optional keys per module are documented below.
+
+### Module keys the setup panel expects
+
+All IDs must be Discord snowflakes represented as strings (e.g. `'123456789012345678'`).
+
+#### Autobouncer (`config.autoban`)
+
+| Key | Type | Required? | Notes |
+| --- | --- | --- | --- |
+| `enabled` | boolean | Optional (default `true`) | Toggle the feature without deleting the block list. |
+| `blockedUsernames` | string[] | Optional (defaults to `['mega','megas','link','links']`) | Strings are normalised to lowercase. |
+| `notifyChannelId` | string \| null | Optional | Target channel for human-readable ban logs. |
+| `notifyWebhookUrls` | string[] | Optional | Each entry must be a Discord webhook URL; duplicates are removed. |
+| `deleteMessageSeconds` | integer | Optional (default `0`) | Number of seconds of message history to purge when banning. |
+| `scanBio` | boolean | Optional (default `true`) | When `true`, `/setup` allows enabling profile bio scanning. |
+| `testRoleMap` | object | Optional | Maps guild IDs to "test" role IDs so `/setup` can seed overrides. |
+
+Autobouncer also consults `config.welcome` to find fallback announcement channels for ban notices.
+
+#### Rainbow Bridge (`config.rainbowBridge`)
+
+| Key | Type | Required? | Notes |
+| --- | --- | --- | --- |
+| `forwardBots` | boolean | Optional (default `true`) | Global switch; per-bridge overrides inherit from this. |
+| `bridges` | object | Optional | Map of bridge IDs to configuration objects. Each bridge requires at least two channel definitions. |
+
+Each bridge entry supports:
+
+- `name` (string, optional): friendly label in `/setup`.
+- `forwardBots` (boolean, optional): overrides the global setting.
+- `forms` (object, optional): keyed by guild ID with `{ guildId, channelId, threadId?, parentId?, webhookUrl, name? }` payloads. `/setup` maintains this shape when you edit a bridge in-place.
+- `channels` (array, optional): legacy array of the same objects; normalised into `forms` at boot.
+
+#### Experience (`config.experience`)
+
+`config.experience` maps guild IDs to XP rule collections. Every guild entry contains:
+
+- `rules` (array): If empty or missing, a default rule is created automatically. Each rule exposes:
+  - `id` (string) and `name` (string).
+  - `message`, `voice`, and `reaction` blocks with `enabled`, amount, and cooldown fields.
+  - `resets` (`onLeave`, `onBan` booleans).
+  - `multiplier` (number).
+  - `channelBlacklist`/`roleBlacklist` (string ID arrays).
+  - `levelUpChannelId` (string ID).
+  - `leaderboard` block (`customUrl`, `autoChannelId`, `showAvatar`, `stackRoles`, `giveRoleOnJoin`, `statCooldownSeconds`).
+  - `blacklist` block containing `channels` and `categories` arrays used across all earning sources.
+- `activeRuleId` (string, optional): If omitted, the first rule is activated automatically.
+
+#### Embed Builder (`config.embedBuilder`)
+
+| Key | Type | Required? | Notes |
+| --- | --- | --- | --- |
+| `guildId` | string \| null | Optional | Last guild opened in `/setup`. |
+| `channelId` | string \| null | Optional | Target channel for the "Post embed" action. |
+| `preface` | string | Optional | Message content posted before the embed. Truncated to 2,000 characters. |
+| `embed` | object | Optional | `{ color, title, description }`, all strings. Color accepts hex codes or named swatches. |
+| `buttons` | array | Optional | Each entry is `{ label, url }` (HTTPS only), up to five buttons total. |
+
+### Examples
+
+Minimal module config stub (after rendering from environment):
+
+```json
+{
+  "loggingServerId": "123456789012345678",
+  "mainServerIds": ["123456789012345678"],
+  "autoban": {},
+  "rainbowBridge": { "bridges": {} },
+  "experience": {},
+  "embedBuilder": {}
+}
+```
+
+Full example with explicit overrides:
+
+```json
+{
+  "autoban": {
+    "enabled": true,
+    "blockedUsernames": ["mega", "rblx"],
+    "notifyChannelId": "112233445566778899",
+    "notifyWebhookUrls": ["https://discord.com/api/webhooks/..."],
+    "deleteMessageSeconds": 60,
+    "scanBio": true,
+    "testRoleMap": { "123456789012345678": "998877665544332211" }
+  },
+  "rainbowBridge": {
+    "forwardBots": false,
+    "bridges": {
+      "rules-updates": {
+        "name": "Rules sync",
+        "forms": {
+          "123456789012345678": {
+            "guildId": "123456789012345678",
+            "channelId": "223344556677889900",
+            "webhookUrl": "https://discord.com/api/webhooks/..."
+          },
+          "223344556677889900": {
+            "guildId": "223344556677889900",
+            "channelId": "334455667788990011",
+            "webhookUrl": "https://discord.com/api/webhooks/...",
+            "name": "Partner rules"
+          }
+        }
+      }
+    }
+  },
+  "experience": {
+    "123456789012345678": {
+      "activeRuleId": "default",
+      "rules": [
+        {
+          "id": "default",
+          "name": "Default",
+          "message": { "enabled": true, "amount": 10, "cooldownSeconds": 60 },
+          "voice": { "enabled": false, "amountPerMinute": 5 },
+          "reaction": { "enabled": true, "amount": 3, "cooldownSeconds": 30 },
+          "resets": { "onLeave": true, "onBan": true },
+          "multiplier": 1.0,
+          "levelUpChannelId": "445566778899001122",
+          "leaderboard": { "autoChannelId": "556677889900112233" },
+          "blacklist": { "channels": ["667788990011223344"], "categories": [] }
+        }
+      ]
+    }
+  },
+  "embedBuilder": {
+    "guildId": "123456789012345678",
+    "channelId": "889900112233445566",
+    "preface": "@here Patch notes are live!",
+    "embed": {
+      "color": "#5865F2",
+      "title": "Season Update",
+      "description": "Highlights and fixes for this release."
+    },
+    "buttons": [
+      { "label": "Read more", "url": "https://example.com/patch" }
+    ]
+  }
+}
+```
+
+### Validation and boot behaviour
+
+- Autobouncer, Rainbow Bridge, Experience, and Embed Builder each normalise their configuration during `init`, filling in defaults and trimming invalid entries. `/setup` uses the same helpers when persisting changes, so supplying the documented shapes prevents silent drops.
+- When `/setup` writes updates, it immediately saves `config.json`. Keep backups or commit changes before editing live environments.
+- Arrays supplied via environment variables (`RAINBOW_BRIDGE_BRIDGES_JSON`, `WELCOME_CONFIG_JSON`, etc.) must be valid JSON strings; the render script parses them before the bot boots.
+
+### Checklist before running `/setup`
+
+1. Render `config.json` from the latest environment.
+2. Confirm `loggingServerId` and the `mainServerIds` list reference guilds the bot can manage.
+3. Ensure each module section is present (even if empty objects) so `/setup` can hydrate defaults.
+4. Double-check destination channel/role IDs and webhook URLs for typos.
+5. Restart or reload the bot so `init` picks up the new configuration before launching `/setup`.
+
 ## Configuration reference
 
 All configuration lives in `config.json`, which is materialised by `scripts/render-config.mjs` using environment variables for every secret. Set secrets (tokens, webhooks, and other sensitive values) through the environment, then render the file. Relevant keys:
