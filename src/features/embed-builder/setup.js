@@ -11,7 +11,6 @@ import {
     TextInputStyle
 } from 'discord.js';
 import {
-    appendHomeButtonRow,
     collectTextChannels,
     formatChannel,
     sanitizeSnowflakeId,
@@ -225,6 +224,47 @@ export function createEmbedBuilderSetup({ panelStore, saveConfig, fetchGuild }) 
                         )
                     );
                     await interaction.showModal(modal);
+                    return;
+                }
+                case 'setup:embed:postEmbed': {
+                    if (!currentGuildId) {
+                        await interaction.reply({ content: 'Select a server before posting the embed.', ephemeral: true });
+                        return;
+                    }
+                    if (!embedConfig.channelId) {
+                        await interaction.reply({ content: 'Choose a target channel before posting the embed.', ephemeral: true });
+                        return;
+                    }
+                    const guild = await fetchGuild(client, currentGuildId).catch(() => null);
+                    if (!guild) {
+                        await interaction.reply({ content: 'Could not load the selected server. Try again.', ephemeral: true });
+                        return;
+                    }
+                    const channelId = embedConfig.channelId;
+                    let channel = guild.channels?.cache?.get(channelId) ?? null;
+                    if (!channel && typeof guild.channels?.fetch === 'function') {
+                        channel = await guild.channels.fetch(channelId).catch(() => null);
+                    }
+                    if (!channel || typeof channel.isTextBased !== 'function' || !channel.isTextBased()) {
+                        await interaction.reply({ content: 'The configured channel could not be accessed. Pick another channel.', ephemeral: true });
+                        return;
+                    }
+
+                    const { payload, error } = buildEmbedPostPayload(embedConfig);
+                    if (error) {
+                        await interaction.reply({ content: error, ephemeral: true });
+                        return;
+                    }
+
+                    await interaction.deferReply({ ephemeral: true });
+                    try {
+                        await channel.send(payload);
+                        await interaction.editReply({ content: `Embed posted to <#${channel.id}>.` });
+                    } catch (err) {
+                        const message = err?.message ?? String(err ?? 'unknown error');
+                        logger?.warn?.(`[embed] Failed to post embed in ${guild.id}:${channel.id} — ${message}`);
+                        await interaction.editReply({ content: `Failed to post embed: ${message}` });
+                    }
                     return;
                 }
                 case 'setup:embed:clearButtons': {
@@ -535,8 +575,13 @@ export function createEmbedBuilderSetup({ panelStore, saveConfig, fetchGuild }) 
             components.push(new ActionRowBuilder().addComponents(channelMenu));
         }
 
+        const hasPostableContent = Boolean((embedConfig.preface ?? '').trim())
+            || Boolean(embedConfig.embed?.title)
+            || Boolean(embedConfig.embed?.description);
+        const postButtonDisabled = !embedConfig.channelId || !hasPostableContent;
+
         if (effectiveMode === 'default') {
-            const defaultRow = new ActionRowBuilder().addComponents(
+            const editRow = new ActionRowBuilder().addComponents(
                 new ButtonBuilder()
                 .setCustomId('setup:embed:openChannelSelect')
                 .setLabel('Set channel')
@@ -553,23 +598,27 @@ export function createEmbedBuilderSetup({ panelStore, saveConfig, fetchGuild }) 
                 new ButtonBuilder()
                 .setCustomId('setup:embed:setDescription')
                 .setLabel('Set content')
-                .setStyle(ButtonStyle.Secondary),
+                .setStyle(ButtonStyle.Secondary)
+            );
+            const navRow = new ActionRowBuilder().addComponents(
                 new ButtonBuilder()
                 .setCustomId('setup:embed:openManage')
                 .setLabel('Manage buttons')
-                .setStyle(ButtonStyle.Primary)
+                .setStyle(ButtonStyle.Primary),
+                new ButtonBuilder()
+                .setCustomId('setup:embed:postEmbed')
+                .setLabel('Post embed')
+                .setStyle(ButtonStyle.Success)
+                .setDisabled(postButtonDisabled),
+                createHomeButton()
             );
-            components.push(defaultRow);
+            components.push(editRow, navRow);
         } else if (effectiveMode === 'select-channel') {
             const channelRow = new ActionRowBuilder().addComponents(
                 new ButtonBuilder()
                 .setCustomId('setup:embed:returnDefault')
                 .setLabel('Done selecting channel')
                 .setStyle(ButtonStyle.Primary),
-                new ButtonBuilder()
-                .setCustomId('setup:embed:openManage')
-                .setLabel('Manage buttons')
-                .setStyle(ButtonStyle.Secondary),
                 new ButtonBuilder()
                 .setCustomId('setup:embed:setPreface')
                 .setLabel('Set pre-text')
@@ -583,7 +632,19 @@ export function createEmbedBuilderSetup({ panelStore, saveConfig, fetchGuild }) 
                 .setLabel('Set content')
                 .setStyle(ButtonStyle.Secondary)
             );
-            components.push(channelRow);
+            const navRow = new ActionRowBuilder().addComponents(
+                new ButtonBuilder()
+                .setCustomId('setup:embed:openManage')
+                .setLabel('Manage buttons')
+                .setStyle(ButtonStyle.Secondary),
+                new ButtonBuilder()
+                .setCustomId('setup:embed:postEmbed')
+                .setLabel('Post embed')
+                .setStyle(ButtonStyle.Success)
+                .setDisabled(postButtonDisabled),
+                createHomeButton()
+            );
+            components.push(channelRow, navRow);
         } else if (effectiveMode === 'manage-buttons') {
             const manageRow = new ActionRowBuilder().addComponents(
                 new ButtonBuilder()
@@ -601,13 +662,11 @@ export function createEmbedBuilderSetup({ panelStore, saveConfig, fetchGuild }) 
                 .setLabel('Back to embed')
                 .setStyle(ButtonStyle.Secondary),
                 new ButtonBuilder()
-                .setCustomId('setup:embed:setTitle')
-                .setLabel('Set title')
-                .setStyle(ButtonStyle.Secondary),
-                new ButtonBuilder()
-                .setCustomId('setup:embed:setDescription')
-                .setLabel('Set content')
-                .setStyle(ButtonStyle.Secondary)
+                .setCustomId('setup:embed:postEmbed')
+                .setLabel('Post embed')
+                .setStyle(ButtonStyle.Success)
+                .setDisabled(postButtonDisabled),
+                createHomeButton()
             );
             components.push(manageRow);
         }
@@ -640,8 +699,6 @@ export function createEmbedBuilderSetup({ panelStore, saveConfig, fetchGuild }) 
             components.push(new ActionRowBuilder().addComponents(removeMenu));
         }
 
-        appendHomeButtonRow(components);
-
         const embeds = [summary, preview];
         return { embeds, components };
     }
@@ -652,6 +709,79 @@ export function createEmbedBuilderSetup({ panelStore, saveConfig, fetchGuild }) 
         buildView,
         collectEligibleGuildIds
     };
+}
+
+function buildEmbedPostPayload(embedConfig) {
+    const preface = typeof embedConfig.preface === 'string' ? embedConfig.preface.trim() : '';
+    const title = embedConfig.embed?.title ?? '';
+    const description = embedConfig.embed?.description ?? '';
+    const hasTitle = Boolean(title);
+    const hasDescription = Boolean(description);
+    const hasEmbedContent = hasTitle || hasDescription;
+    const hasPreface = Boolean(preface);
+
+    if (!hasEmbedContent && !hasPreface) {
+        return { error: 'Add pre-text or embed content before posting.' };
+    }
+
+    const payload = {};
+
+    if (hasPreface) {
+        payload.content = preface;
+    }
+
+    if (hasEmbedContent) {
+        const outgoingEmbed = new EmbedBuilder();
+        if (hasTitle) {
+            outgoingEmbed.setTitle(title);
+        }
+        if (hasDescription) {
+            outgoingEmbed.setDescription(description);
+        }
+        const colorValue = resolveColor(embedConfig.embed?.color);
+        if (colorValue !== null) {
+            outgoingEmbed.setColor(colorValue);
+        }
+        payload.embeds = [outgoingEmbed];
+    }
+
+    const buttonRows = buildButtonRows(embedConfig.buttons);
+    if (buttonRows.length) {
+        payload.components = buttonRows;
+    }
+
+    return { payload };
+}
+
+function buildButtonRows(buttons) {
+    if (!Array.isArray(buttons) || !buttons.length) {
+        return [];
+    }
+    const rows = [];
+    const slice = buttons.slice(0, BUTTON_LIMIT);
+    const row = new ActionRowBuilder();
+    for (const btn of slice) {
+        const label = btn?.label ?? '';
+        const url = btn?.url ?? '';
+        if (!label || !url) continue;
+        row.addComponents(
+            new ButtonBuilder()
+            .setLabel(label)
+            .setURL(url)
+            .setStyle(ButtonStyle.Link)
+        );
+    }
+    if (row.components.length) {
+        rows.push(row);
+    }
+    return rows;
+}
+
+function createHomeButton() {
+    return new ButtonBuilder()
+    .setCustomId('setup:navigate:home')
+    .setLabel('⬅ Back to overview')
+    .setStyle(ButtonStyle.Secondary);
 }
 
 function ensureEmbedConfig(config) {

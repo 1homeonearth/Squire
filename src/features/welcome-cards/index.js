@@ -185,6 +185,12 @@ export function init({ client, logger, config }) {
         autobannedMembers.set(key, timeout);
     };
 
+    const isMarkedAutoban = (guildId, userId) => {
+        if (!guildId || !userId) return false;
+        const key = `${guildId}:${userId}`;
+        return autobannedMembers.has(key);
+    };
+
     const clearAutoban = (guildId, userId) => {
         if (!guildId || !userId) return;
         const key = `${guildId}:${userId}`;
@@ -459,6 +465,11 @@ export function init({ client, logger, config }) {
     client.on('guildMemberRemove', async (member) => {
         try {
             if (!member.guild) return;
+            if (isMarkedAutoban(member.guild.id, member.id)) {
+                logger?.debug?.(`[welcome] Suppressing farewell for ${member.id} in ${member.guild.id} due to autoban.`);
+                clearAutoban(member.guild.id, member.id);
+                return;
+            }
             const welcomeCfg = currentConfig?.welcome?.[member.guild.id] || {};
             const ch = await findWelcomeChannel(member.guild, welcomeCfg.channelId);
             if (!ch) return;
