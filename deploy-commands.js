@@ -28,6 +28,19 @@ const commands = [
         dm_permission: false
     },
     {
+        name: 'add',
+        description: 'Add a Spotify track or YouTube video to the shared playlist',
+        dm_permission: false,
+        options: [
+            {
+                type: 3,
+                name: 'link',
+                description: 'Paste a Spotify track or YouTube video link.',
+                required: true
+            }
+        ]
+    },
+    {
         name: 'xp',
         description: 'Manage member experience points',
         default_member_permissions: MANAGE_GUILD,
@@ -72,11 +85,11 @@ async function main() {
         }
         // Fast dev: overwrite commands in one guild (appears instantly). :contentReference[oaicite:1]{index=1}
         await rest.put(Routes.applicationGuildCommands(APP_ID, DEV_GUILD_ID), { body: commands });
-        console.log(`✅ Guild commands registered in ${DEV_GUILD_ID} (dev mode).`);
+        console.log(`✅ Guild commands registered in ${DEV_GUILD_ID} (dev mode): ${commands.map(c => `/${c.name}`).join(', ')}`);
     } else {
-        // Global: overwrite all global commands with just /setup (may take some time to fan out). :contentReference[oaicite:2]{index=2}
+        // Global: overwrite all global commands (may take some time to fan out). :contentReference[oaicite:2]{index=2}
         await rest.put(Routes.applicationCommands(APP_ID), { body: commands });
-        console.log('✅ Global commands registered: /setup');
+        console.log(`✅ Global commands registered: ${commands.map(c => `/${c.name}`).join(', ')}`);
     }
 }
 

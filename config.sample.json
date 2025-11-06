@@ -13,7 +13,8 @@
     "logging-forwarder",
     "rainbow-bridge",
     "welcome-cards",
-    "experience"
+    "experience",
+    "playlists"
   ],
   "mapping": "$ENV{MAPPING_JSON}",
   "loggingChannels": "$ENV{LOGGING_CHANNELS_JSON}",
@@ -38,6 +39,21 @@
   "embedBuilder": {},
   "experience": "$ENV{EXPERIENCE_CONFIG_JSON}",
   "mainServerIds": "$ENV{MAIN_SERVER_IDS_JSON}",
-  "welcome": "$ENV{WELCOME_CONFIG_JSON}"
+  "welcome": "$ENV{WELCOME_CONFIG_JSON}",
+  "playlists": {
+    "spotify": {
+      "clientId": "$ENV{SPOTIFY_CLIENT_ID}",
+      "clientSecret": "$ENV{SPOTIFY_CLIENT_SECRET}",
+      "refreshToken": "$ENV{SPOTIFY_REFRESH_TOKEN}",
+      "playlistId": "$ENV{SPOTIFY_PLAYLIST_ID}",
+      "skipDupes": "$ENV{PLAYLISTS_SKIP_DUPES}"
+    },
+    "youtube": {
+      "clientId": "$ENV{YT_CLIENT_ID}",
+      "clientSecret": "$ENV{YT_CLIENT_SECRET}",
+      "refreshToken": "$ENV{YT_REFRESH_TOKEN}",
+      "playlistId": "$ENV{YT_PLAYLIST_ID}"
+    }
+  }
 }
 

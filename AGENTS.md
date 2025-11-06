@@ -47,8 +47,15 @@ PRs are acceptable only if `npm run lint`, `npm test`, and `npm run build` all p
    - **Rainbow Bridge (`config.rainbowBridge`)**: top-level `forwardBots` boolean plus a `bridges` map. Each bridge contains a `name`, optional `forwardBots` override, and `forms` keyed by guild ID with `{ guildId, channelId, threadId?, parentId?, webhookUrl, name? }`. Legacy `channels` arrays are accepted and normalised.
    - **Experience (`config.experience`)**: map of guild IDs to `{ activeRuleId?, rules: [...] }`. Each rule exposes `id`, `name`, `message`/`voice`/`reaction` blocks (with `enabled`, amount, cooldown), `resets`, `multiplier`, `channelBlacklist`, `roleBlacklist`, `levelUpChannelId`, a `leaderboard` object, and a global `blacklist` with `channels`/`categories`. Missing rules trigger auto-generation of the default rule template.
    - **Embed Builder (`config.embedBuilder`)**: `{ guildId?, channelId?, preface, embed: { color, title, description }, buttons: [{ label, url }, …] }`. Buttons must use HTTPS URLs and there can be at most five.
+   - **Playlists (`config.playlists`)**: configure Spotify (`clientId`, `clientSecret`, `refreshToken`, `playlistId`, optional `skipDupes`) and YouTube (`clientId`, `clientSecret`, `refreshToken`, `playlistId`) credentials for the `/add` command. Populate values via `$ENV{...}` placeholders — secrets never live in git.
 5. Use raw Discord snowflake IDs (strings) for channels, roles, guilds, and threads. Do not rely on names; setup stores exact IDs.
 6. Before running `/setup`, confirm `config.json` renders without missing variables, double-check destination IDs/webhooks, and restart the bot so every feature re-reads the new config.
+
+### Playlist module secrets
+- `SPOTIFY_CLIENT_ID`, `SPOTIFY_CLIENT_SECRET`, `SPOTIFY_REFRESH_TOKEN`, `SPOTIFY_PLAYLIST_ID`
+- `YT_CLIENT_ID`, `YT_CLIENT_SECRET`, `YT_REFRESH_TOKEN`, `YT_PLAYLIST_ID`
+- Optional: `PLAYLISTS_SKIP_DUPES=true` to skip re-posting Spotify tracks already present.
+- Use `node scripts/spotify-refresh-token.mjs` or `node scripts/youtube-refresh-token.mjs` to exchange authorization codes or refresh existing tokens when rotating credentials.
 
 ## Deployment & server contract
 - Remote host: MCS (Debian 13), SSH port 123, key-based auth only.
