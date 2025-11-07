@@ -31,6 +31,9 @@ const COLOR_OPTIONS = [
 
 const BUTTON_LIMIT = 5;
 const DESCRIPTION_MAX_LENGTH = 4000;
+const PRESET_NAME_MAX_LENGTH = 80;
+const DEFAULT_PRESET_KEY = 'general';
+const DEFAULT_PRESET_NAME = 'General announcement';
 
 export function createEmbedBuilderSetup({ panelStore, saveConfig, fetchGuild }) {
     function prepareConfig(config) {
@@ -42,20 +45,35 @@ export function createEmbedBuilderSetup({ panelStore, saveConfig, fetchGuild }) 
             ? entry.availableGuildIds
             : collectEligibleGuildIds(config);
 
-        const embedConfig = ensureEmbedConfig(config);
+        const embedState = ensureEmbedConfig(config);
+        const presetKeys = Object.keys(embedState.embeds);
+        const storedPreset = entry?.presetKey;
+        const activePresetKey = storedPreset && embedState.embeds[storedPreset]
+            ? storedPreset
+            : (embedState.activeKey && embedState.embeds[embedState.activeKey]
+                ? embedState.activeKey
+                : (presetKeys[0] ?? DEFAULT_PRESET_KEY));
+        let currentPresetKey = activePresetKey;
+        const embedConfig = embedState.embeds[activePresetKey] ?? embedState.embeds[presetKeys[0]];
+
         const entryGuildId = entry?.guildId ?? null;
+        const configGuildId = embedConfig?.guildId ? sanitizeSnowflakeId(embedConfig.guildId) : null;
         const currentGuildId = entryGuildId
-            ?? (embedConfig.guildId ? sanitizeSnowflakeId(embedConfig.guildId) : null)
+            ?? configGuildId
             ?? (availableGuildIds[0] ?? null);
 
         const baseContext = entry?.context ?? {};
         const currentMode = entry?.mode ?? 'default';
 
         const persistState = (message, overrides = {}) => {
+            if (typeof overrides.presetKey === 'string') {
+                currentPresetKey = overrides.presetKey;
+            }
             panelStore.set(key, {
                 message,
                 guildId: overrides.guildId ?? currentGuildId ?? null,
                 mode: overrides.mode ?? currentMode,
+                presetKey: overrides.presetKey ?? currentPresetKey,
                 context: overrides.context ?? baseContext,
                 availableGuildIds
             });
@@ -63,18 +81,26 @@ export function createEmbedBuilderSetup({ panelStore, saveConfig, fetchGuild }) 
 
         const refreshFromStore = async (overrides = {}) => {
             const state = panelStore.get(key) ?? {};
+            const statePreset = overrides.presetKey ?? state.presetKey ?? activePresetKey;
+            const presetKey = embedState.embeds[statePreset]
+                ? statePreset
+                : (embedState.activeKey && embedState.embeds[embedState.activeKey]
+                    ? embedState.activeKey
+                    : Object.keys(embedState.embeds)[0]);
             const guildId = overrides.guildId ?? state.guildId ?? currentGuildId ?? null;
             const mode = overrides.mode ?? state.mode ?? 'default';
             const context = overrides.context ?? state.context ?? {};
             const guild = guildId ? await fetchGuild(client, guildId).catch(() => null) : null;
             const eligible = overrides.availableGuildIds ?? state.availableGuildIds ?? availableGuildIds;
             if (!state.message) return;
+            currentPresetKey = presetKey;
             const view = await buildView({
                 config,
                 client,
                 guild,
                 mode,
                 context,
+                presetKey,
                 availableGuildIds: eligible
             });
             try {
@@ -83,6 +109,7 @@ export function createEmbedBuilderSetup({ panelStore, saveConfig, fetchGuild }) 
                     message,
                     guildId,
                     mode,
+                    presetKey,
                     context,
                     availableGuildIds: eligible
                 });
@@ -101,46 +128,49 @@ export function createEmbedBuilderSetup({ panelStore, saveConfig, fetchGuild }) 
                         await interaction.reply({ content: 'Could not load the selected server. Try again.', ephemeral: true });
                         return;
                     }
-                    const view = await buildView({
-                        config,
-                        client,
-                        guild,
-                        mode: 'select-channel',
-                        context: baseContext,
-                        availableGuildIds
-                    });
-                    const message = await interaction.update(view);
-                    persistState(message, { guildId: currentGuildId, mode: 'select-channel', context: baseContext });
-                    return;
-                }
+            const view = await buildView({
+                config,
+                client,
+                guild,
+                mode: 'select-channel',
+                context: baseContext,
+                presetKey: currentPresetKey,
+                availableGuildIds
+            });
+            const message = await interaction.update(view);
+            persistState(message, { guildId: currentGuildId, mode: 'select-channel', context: baseContext });
+            return;
+        }
                 case 'setup:embed:openManage': {
                     const guild = currentGuildId ? await fetchGuild(client, currentGuildId).catch(() => null) : null;
-                    const view = await buildView({
-                        config,
-                        client,
-                        guild,
-                        mode: 'manage-buttons',
-                        context: baseContext,
-                        availableGuildIds
-                    });
-                    const message = await interaction.update(view);
-                    persistState(message, { guildId: currentGuildId, mode: 'manage-buttons', context: baseContext });
-                    return;
-                }
+            const view = await buildView({
+                config,
+                client,
+                guild,
+                mode: 'manage-buttons',
+                context: baseContext,
+                presetKey: currentPresetKey,
+                availableGuildIds
+            });
+            const message = await interaction.update(view);
+            persistState(message, { guildId: currentGuildId, mode: 'manage-buttons', context: baseContext });
+            return;
+        }
                 case 'setup:embed:returnDefault': {
                     const guild = currentGuildId ? await fetchGuild(client, currentGuildId).catch(() => null) : null;
-                    const view = await buildView({
-                        config,
-                        client,
-                        guild,
-                        mode: 'default',
-                        context: baseContext,
-                        availableGuildIds
-                    });
-                    const message = await interaction.update(view);
-                    persistState(message, { guildId: currentGuildId, mode: 'default', context: baseContext });
-                    return;
-                }
+            const view = await buildView({
+                config,
+                client,
+                guild,
+                mode: 'default',
+                context: baseContext,
+                presetKey: currentPresetKey,
+                availableGuildIds
+            });
+            const message = await interaction.update(view);
+            persistState(message, { guildId: currentGuildId, mode: 'default', context: baseContext });
+            return;
+        }
                 case 'setup:embed:setPreface': {
                     const modal = new ModalBuilder()
                     .setCustomId('setup:embed:prefaceModal')
@@ -277,6 +307,7 @@ export function createEmbedBuilderSetup({ panelStore, saveConfig, fetchGuild }) 
                         guild,
                         mode: currentMode,
                         context: baseContext,
+                        presetKey: currentPresetKey,
                         availableGuildIds
                     });
                     const message = await interaction.update(view);
@@ -292,6 +323,99 @@ export function createEmbedBuilderSetup({ panelStore, saveConfig, fetchGuild }) 
         if (interaction.isAnySelectMenu()) {
             const [, , action] = interaction.customId.split(':');
             switch (action) {
+                case 'selectPreset': {
+                    const choice = interaction.values?.[0] ?? null;
+                    if (!choice) {
+                        await interaction.deferUpdate().catch(() => {});
+                        return;
+                    }
+                    if (choice === 'action:create') {
+                        const modal = new ModalBuilder()
+                        .setCustomId('setup:embed:createPresetModal')
+                        .setTitle('Create preset')
+                        .addComponents(
+                            new ActionRowBuilder().addComponents(
+                                new TextInputBuilder()
+                                .setCustomId('setup:embed:newPresetName')
+                                .setLabel('Preset name')
+                                .setStyle(TextInputStyle.Short)
+                                .setRequired(true)
+                                .setMaxLength(PRESET_NAME_MAX_LENGTH)
+                            )
+                        );
+                        await interaction.showModal(modal);
+                        return;
+                    }
+                    if (choice === 'action:rename') {
+                        const modal = new ModalBuilder()
+                        .setCustomId('setup:embed:renamePresetModal')
+                        .setTitle('Rename preset')
+                        .addComponents(
+                            new ActionRowBuilder().addComponents(
+                                new TextInputBuilder()
+                                .setCustomId('setup:embed:renamePresetName')
+                                .setLabel('New preset name')
+                                .setStyle(TextInputStyle.Short)
+                                .setRequired(true)
+                                .setMaxLength(PRESET_NAME_MAX_LENGTH)
+                                .setValue(embedConfig?.name ?? '')
+                            )
+                        );
+                        await interaction.showModal(modal);
+                        return;
+                    }
+                    if (choice === 'action:delete') {
+                        const totalPresets = Object.keys(embedState.embeds).length;
+                        if (totalPresets <= 1) {
+                            await interaction.reply({ content: 'Keep at least one preset. Create another before deleting this one.', ephemeral: true });
+                            return;
+                        }
+                        const modal = new ModalBuilder()
+                        .setCustomId('setup:embed:deletePresetModal')
+                        .setTitle('Delete preset')
+                        .addComponents(
+                            new ActionRowBuilder().addComponents(
+                                new TextInputBuilder()
+                                .setCustomId('setup:embed:deletePresetConfirm')
+                                .setLabel('Type the preset name to confirm')
+                                .setStyle(TextInputStyle.Short)
+                                .setRequired(true)
+                                .setMaxLength(PRESET_NAME_MAX_LENGTH)
+                                .setPlaceholder(embedConfig?.name ?? 'Preset name')
+                            )
+                        );
+                        await interaction.showModal(modal);
+                        return;
+                    }
+                    if (choice.startsWith('preset:')) {
+                        const nextKey = choice.slice(7);
+                        if (!embedState.embeds[nextKey]) {
+                            await interaction.reply({ content: 'Could not load that preset. Try again.', ephemeral: true });
+                            return;
+                        }
+                        embedState.activeKey = nextKey;
+                        currentPresetKey = nextKey;
+                        const targetGuildId = embedState.embeds[nextKey]?.guildId
+                            ? sanitizeSnowflakeId(embedState.embeds[nextKey].guildId)
+                            : (currentGuildId ?? availableGuildIds[0] ?? null);
+                        const guild = targetGuildId ? await fetchGuild(client, targetGuildId).catch(() => null) : null;
+                        saveConfig(config, logger);
+                        const view = await buildView({
+                            config,
+                            client,
+                            guild,
+                            mode: currentMode,
+                            context: baseContext,
+                            presetKey: nextKey,
+                            availableGuildIds
+                        });
+                        const message = await interaction.update(view);
+                        persistState(message, { guildId: targetGuildId, mode: currentMode, context: baseContext, presetKey: nextKey });
+                        return;
+                    }
+                    await interaction.deferUpdate().catch(() => {});
+                    return;
+                }
                 case 'selectGuild': {
                     const choice = interaction.values?.[0] ?? null;
                     const nextGuildId = choice && choice !== 'noop' ? choice : null;
@@ -310,6 +434,7 @@ export function createEmbedBuilderSetup({ panelStore, saveConfig, fetchGuild }) 
                         guild,
                         mode: nextMode,
                         context: baseContext,
+                        presetKey: currentPresetKey,
                         availableGuildIds
                     });
                     const message = await interaction.update(view);
@@ -340,6 +465,7 @@ export function createEmbedBuilderSetup({ panelStore, saveConfig, fetchGuild }) 
                         guild,
                         mode: 'default',
                         context: baseContext,
+                        presetKey: currentPresetKey,
                         availableGuildIds
                     });
                     const message = await interaction.update(view);
@@ -359,6 +485,7 @@ export function createEmbedBuilderSetup({ panelStore, saveConfig, fetchGuild }) 
                         guild,
                         mode: currentMode,
                         context: baseContext,
+                        presetKey: currentPresetKey,
                         availableGuildIds
                     });
                     const message = await interaction.update(view);
@@ -388,6 +515,7 @@ export function createEmbedBuilderSetup({ panelStore, saveConfig, fetchGuild }) 
                         guild,
                         mode: currentMode,
                         context: baseContext,
+                        presetKey: currentPresetKey,
                         availableGuildIds
                     });
                     const message = await interaction.update(view);
@@ -401,6 +529,85 @@ export function createEmbedBuilderSetup({ panelStore, saveConfig, fetchGuild }) 
         }
 
         if (interaction.isModalSubmit()) {
+            if (interaction.customId === 'setup:embed:createPresetModal') {
+                const state = panelStore.get(key) ?? {};
+                const embedState = ensureEmbedConfig(config);
+                const baseKey = state.presetKey && embedState.embeds[state.presetKey]
+                    ? state.presetKey
+                    : (embedState.activeKey && embedState.embeds[embedState.activeKey]
+                        ? embedState.activeKey
+                        : Object.keys(embedState.embeds)[0]);
+                const basePreset = embedState.embeds[baseKey];
+                const rawName = interaction.fields.getTextInputValue('setup:embed:newPresetName') ?? '';
+                const name = sanitizePresetName(rawName, DEFAULT_PRESET_NAME);
+                const existingKeys = Object.keys(embedState.embeds);
+                const newKey = generatePresetKey(name, existingKeys);
+                const template = basePreset ? { ...basePreset, name } : { name };
+                embedState.embeds[newKey] = normalizeEmbedEntry(template, name);
+                embedState.activeKey = newKey;
+                saveConfig(config, logger);
+                await interaction.reply({ content: `Created preset **${name}**.`, ephemeral: true });
+                await refreshFromStore({ presetKey: newKey, guildId: embedState.embeds[newKey]?.guildId ?? null, mode: 'default' });
+                return;
+            }
+
+            if (interaction.customId === 'setup:embed:renamePresetModal') {
+                const state = panelStore.get(key) ?? {};
+                const embedState = ensureEmbedConfig(config);
+                const presetKey = state.presetKey && embedState.embeds[state.presetKey]
+                    ? state.presetKey
+                    : (embedState.activeKey && embedState.embeds[embedState.activeKey]
+                        ? embedState.activeKey
+                        : Object.keys(embedState.embeds)[0]);
+                const preset = embedState.embeds[presetKey];
+                if (!preset) {
+                    await interaction.reply({ content: 'Could not find that preset. Try again.', ephemeral: true });
+                    return;
+                }
+                const rawName = interaction.fields.getTextInputValue('setup:embed:renamePresetName') ?? '';
+                const name = sanitizePresetName(rawName, preset.name);
+                preset.name = name;
+                saveConfig(config, logger);
+                await interaction.reply({ content: `Preset renamed to **${name}**.`, ephemeral: true });
+                await refreshFromStore({ presetKey, guildId: preset.guildId ?? null });
+                return;
+            }
+
+            if (interaction.customId === 'setup:embed:deletePresetModal') {
+                const state = panelStore.get(key) ?? {};
+                const embedState = ensureEmbedConfig(config);
+                const totalPresets = Object.keys(embedState.embeds).length;
+                if (totalPresets <= 1) {
+                    await interaction.reply({ content: 'At least one preset must remain. Create a new preset before deleting this one.', ephemeral: true });
+                    return;
+                }
+                const presetKey = state.presetKey && embedState.embeds[state.presetKey]
+                    ? state.presetKey
+                    : (embedState.activeKey && embedState.embeds[embedState.activeKey]
+                        ? embedState.activeKey
+                        : Object.keys(embedState.embeds)[0]);
+                const preset = embedState.embeds[presetKey];
+                if (!preset) {
+                    await interaction.reply({ content: 'Could not find that preset. Try again.', ephemeral: true });
+                    return;
+                }
+                const confirmation = interaction.fields.getTextInputValue('setup:embed:deletePresetConfirm') ?? '';
+                if (confirmation.trim().toLowerCase() !== preset.name.trim().toLowerCase()) {
+                    await interaction.reply({ content: 'Type the preset name exactly to delete it.', ephemeral: true });
+                    return;
+                }
+                delete embedState.embeds[presetKey];
+                const remainingKeys = Object.keys(embedState.embeds);
+                const nextKey = embedState.activeKey && embedState.embeds[embedState.activeKey]
+                    ? embedState.activeKey
+                    : remainingKeys[0];
+                embedState.activeKey = nextKey;
+                saveConfig(config, logger);
+                await interaction.reply({ content: `Preset **${preset.name}** deleted.`, ephemeral: true });
+                await refreshFromStore({ presetKey: nextKey, guildId: embedState.embeds[nextKey]?.guildId ?? null, mode: 'default' });
+                return;
+            }
+
             if (interaction.customId === 'setup:embed:prefaceModal') {
                 const raw = interaction.fields.getTextInputValue('setup:embed:prefaceInput') ?? '';
                 embedConfig.preface = sanitizeText(raw, 2000);
@@ -454,19 +661,34 @@ export function createEmbedBuilderSetup({ panelStore, saveConfig, fetchGuild }) 
         }
     }
 
-    async function buildView({ config, client, guild, mode, context: _context, availableGuildIds = [] }) {
-        const embedConfig = ensureEmbedConfig(config);
-        const selectedGuild = guild ?? (embedConfig.guildId ? await fetchGuild(client, embedConfig.guildId).catch(() => null) : null);
+    async function buildView({ config, client, guild, mode, context: _context, presetKey, availableGuildIds = [] }) {
+        const embedState = ensureEmbedConfig(config);
+        const presetKeys = Object.keys(embedState.embeds);
+        const selectedPresetKey = presetKey && embedState.embeds[presetKey]
+            ? presetKey
+            : (embedState.activeKey && embedState.embeds[embedState.activeKey]
+                ? embedState.activeKey
+                : presetKeys[0]);
+        const embedConfig = embedState.embeds[selectedPresetKey];
+
+        const selectedGuild = guild ?? (embedConfig.guildId
+            ? await fetchGuild(client, embedConfig.guildId).catch(() => null)
+            : null);
         const selectedGuildId = selectedGuild?.id ?? embedConfig.guildId ?? null;
-        const eligibleGuilds = availableGuildIds.length ? availableGuildIds : collectEligibleGuildIds(config);
+        const eligibleGuilds = availableGuildIds.length ? [...availableGuildIds] : collectEligibleGuildIds(config);
         if (selectedGuildId && !eligibleGuilds.includes(selectedGuildId)) {
             eligibleGuilds.push(selectedGuildId);
         }
 
         const summary = new EmbedBuilder()
         .setTitle('Embed builder')
-        .setDescription('Configure an embed template with optional pre-text and link buttons. Changes save automatically when you update a field.')
+        .setDescription('Configure reusable embed presets with optional pre-text and link buttons. Changes save automatically when you update a field.')
         .addFields(
+            {
+                name: 'Preset',
+                value: `**${embedConfig.name}**\nKey: \`${selectedPresetKey}\``,
+                inline: false
+            },
             {
                 name: 'Target server',
                 value: selectedGuild
@@ -501,6 +723,15 @@ export function createEmbedBuilderSetup({ panelStore, saveConfig, fetchGuild }) 
             }
         );
 
+        const MAX_PRESET_OPTIONS = 22;
+        if (presetKeys.length > MAX_PRESET_OPTIONS) {
+            summary.addFields({
+                name: 'Preset list',
+                value: `Showing the first ${MAX_PRESET_OPTIONS} presets. Remove unused presets to simplify the menu.`,
+                inline: false
+            });
+        }
+
         const colorValue = resolveColor(embedConfig.embed.color);
         const preview = new EmbedBuilder();
         if (embedConfig.embed.title) {
@@ -520,6 +751,35 @@ export function createEmbedBuilderSetup({ panelStore, saveConfig, fetchGuild }) 
         const effectiveMode = mode === 'manage-buttons'
             ? 'manage-buttons'
             : (mode === 'select-channel' ? 'select-channel' : 'default');
+
+        const presetMenu = new StringSelectMenuBuilder()
+        .setCustomId('setup:embed:selectPreset')
+        .setPlaceholder(presetKeys.length ? 'Select embed preset…' : 'No presets available')
+        .setMinValues(1)
+        .setMaxValues(1)
+        .setDisabled(!presetKeys.length);
+        const keysForMenu = presetKeys.slice(0, MAX_PRESET_OPTIONS);
+        for (const key of keysForMenu) {
+            const entry = embedState.embeds[key];
+            const descriptionParts = [];
+            if (entry.guildId) descriptionParts.push(`Server ${entry.guildId}`);
+            if (entry.channelId) descriptionParts.push(`Channel ${entry.channelId}`);
+            const description = descriptionParts.length
+                ? truncateName(descriptionParts.join(' • '), 100)
+                : 'No targets configured';
+            presetMenu.addOptions({
+                label: truncateName(entry?.name ?? key, 100),
+                description,
+                value: `preset:${key}`,
+                default: key === selectedPresetKey
+            });
+        }
+        presetMenu.addOptions(
+            { label: '➕ Create preset…', value: 'action:create', description: 'Start a new embed preset' },
+            { label: '✏️ Rename current preset…', value: 'action:rename', description: 'Rename the selected preset' },
+            { label: '🗑️ Delete current preset…', value: 'action:delete', description: 'Remove the selected preset' }
+        );
+        components.push(new ActionRowBuilder().addComponents(presetMenu));
 
         const serverMenu = new StringSelectMenuBuilder()
         .setCustomId('setup:embed:selectGuild')
@@ -598,13 +858,13 @@ export function createEmbedBuilderSetup({ panelStore, saveConfig, fetchGuild }) 
                 new ButtonBuilder()
                 .setCustomId('setup:embed:setDescription')
                 .setLabel('Set content')
-                .setStyle(ButtonStyle.Secondary)
-            );
-            const navRow = new ActionRowBuilder().addComponents(
+                .setStyle(ButtonStyle.Secondary),
                 new ButtonBuilder()
                 .setCustomId('setup:embed:openManage')
                 .setLabel('Manage buttons')
-                .setStyle(ButtonStyle.Primary),
+                .setStyle(ButtonStyle.Primary)
+            );
+            const actionRow = new ActionRowBuilder().addComponents(
                 new ButtonBuilder()
                 .setCustomId('setup:embed:postEmbed')
                 .setLabel('Post embed')
@@ -612,7 +872,7 @@ export function createEmbedBuilderSetup({ panelStore, saveConfig, fetchGuild }) 
                 .setDisabled(postButtonDisabled),
                 createHomeButton()
             );
-            components.push(editRow, navRow);
+            components.push(editRow, actionRow);
         } else if (effectiveMode === 'select-channel') {
             const channelRow = new ActionRowBuilder().addComponents(
                 new ButtonBuilder()
@@ -630,13 +890,13 @@ export function createEmbedBuilderSetup({ panelStore, saveConfig, fetchGuild }) 
                 new ButtonBuilder()
                 .setCustomId('setup:embed:setDescription')
                 .setLabel('Set content')
-                .setStyle(ButtonStyle.Secondary)
-            );
-            const navRow = new ActionRowBuilder().addComponents(
+                .setStyle(ButtonStyle.Secondary),
                 new ButtonBuilder()
                 .setCustomId('setup:embed:openManage')
                 .setLabel('Manage buttons')
-                .setStyle(ButtonStyle.Secondary),
+                .setStyle(ButtonStyle.Secondary)
+            );
+            const actionRow = new ActionRowBuilder().addComponents(
                 new ButtonBuilder()
                 .setCustomId('setup:embed:postEmbed')
                 .setLabel('Post embed')
@@ -644,7 +904,7 @@ export function createEmbedBuilderSetup({ panelStore, saveConfig, fetchGuild }) 
                 .setDisabled(postButtonDisabled),
                 createHomeButton()
             );
-            components.push(channelRow, navRow);
+            components.push(channelRow, actionRow);
         } else if (effectiveMode === 'manage-buttons') {
             const manageRow = new ActionRowBuilder().addComponents(
                 new ButtonBuilder()
@@ -671,19 +931,21 @@ export function createEmbedBuilderSetup({ panelStore, saveConfig, fetchGuild }) 
             components.push(manageRow);
         }
 
-        const colorMenu = new StringSelectMenuBuilder()
-        .setCustomId('setup:embed:selectColor')
-        .setPlaceholder('Select embed color…')
-        .setMinValues(1)
-        .setMaxValues(1);
-        const currentColor = (embedConfig.embed.color || DEFAULT_COLOR).toLowerCase();
-        colorMenu.addOptions(COLOR_OPTIONS.map(opt => ({
-            label: opt.label,
-            value: opt.value,
-            emoji: opt.emoji,
-            default: opt.value === currentColor
-        })));
-        components.push(new ActionRowBuilder().addComponents(colorMenu));
+        if (effectiveMode !== 'select-channel') {
+            const colorMenu = new StringSelectMenuBuilder()
+            .setCustomId('setup:embed:selectColor')
+            .setPlaceholder('Select embed color…')
+            .setMinValues(1)
+            .setMaxValues(1);
+            const currentColor = (embedConfig.embed.color || DEFAULT_COLOR).toLowerCase();
+            colorMenu.addOptions(COLOR_OPTIONS.map(opt => ({
+                label: opt.label,
+                value: opt.value,
+                emoji: opt.emoji,
+                default: opt.value === currentColor
+            })));
+            components.push(new ActionRowBuilder().addComponents(colorMenu));
+        }
 
         if (effectiveMode === 'manage-buttons' && (embedConfig.buttons ?? []).length) {
             const removeMenu = new StringSelectMenuBuilder()
@@ -787,54 +1049,58 @@ function createHomeButton() {
 function ensureEmbedConfig(config) {
     if (!config.embedBuilder || typeof config.embedBuilder !== 'object') {
         config.embedBuilder = normalizeEmbedBuilder(null);
+    } else {
+        config.embedBuilder = normalizeEmbedBuilder(config.embedBuilder);
     }
     return config.embedBuilder;
 }
 
 function normalizeEmbedBuilder(value) {
-    const base = {
-        guildId: null,
-        channelId: null,
-        preface: '',
-        embed: {
-            color: DEFAULT_COLOR,
-            title: '',
-            description: ''
-        },
-        buttons: []
+    const normalized = {
+        activeKey: DEFAULT_PRESET_KEY,
+        embeds: {}
     };
 
-    if (!value || typeof value !== 'object') {
-        return base;
+    if (value && typeof value === 'object' && value.embeds && typeof value.embeds === 'object') {
+        const entries = Object.entries(value.embeds)
+            .filter(([key, entry]) => typeof key === 'string' && entry && typeof entry === 'object');
+        for (const [key, entry] of entries) {
+            const safeKey = sanitizePresetKey(key);
+            if (!safeKey) continue;
+            normalized.embeds[safeKey] = normalizeEmbedEntry(entry, entry?.name ?? safeKey);
+        }
+        const desiredKey = sanitizePresetKey(value.activeKey);
+        if (desiredKey && normalized.embeds[desiredKey]) {
+            normalized.activeKey = desiredKey;
+        }
+    } else if (value && typeof value === 'object') {
+        const fallback = normalizeEmbedEntry(value, value.name ?? DEFAULT_PRESET_NAME);
+        const key = generatePresetKey(fallback.name, []);
+        normalized.embeds[key] = fallback;
+        normalized.activeKey = key;
     }
 
-    const normalized = { ...base };
-    normalized.guildId = sanitizeSnowflakeId(value.guildId) ?? null;
-    normalized.channelId = sanitizeSnowflakeId(value.channelId) ?? null;
-    normalized.preface = sanitizeText(value.preface, 2000);
-    const incomingEmbed = value.embed && typeof value.embed === 'object' ? value.embed : {};
-    normalized.embed = {
-        color: resolveColor(incomingEmbed.color) ?? DEFAULT_COLOR,
-        title: sanitizeText(incomingEmbed.title, 256),
-        description: sanitizeText(incomingEmbed.description, DESCRIPTION_MAX_LENGTH)
-    };
-    normalized.buttons = Array.isArray(value.buttons)
-        ? value.buttons
-        .map(btn => ({
-            label: sanitizeButtonLabel(btn?.label),
-            url: sanitizeButtonUrl(btn?.url)
-        }))
-        .filter(btn => btn.label && btn.url)
-        .slice(0, BUTTON_LIMIT)
-        : [];
+    if (!Object.keys(normalized.embeds).length) {
+        const entry = normalizeEmbedEntry({}, DEFAULT_PRESET_NAME);
+        normalized.embeds[DEFAULT_PRESET_KEY] = entry;
+        normalized.activeKey = DEFAULT_PRESET_KEY;
+    }
+
+    // Ensure the active key points at a real preset.
+    if (!normalized.embeds[normalized.activeKey]) {
+        normalized.activeKey = Object.keys(normalized.embeds)[0];
+    }
+
     return normalized;
 }
 
 function collectEligibleGuildIds(config) {
     const set = new Set();
-    const embedConfig = config.embedBuilder && typeof config.embedBuilder === 'object'
-        ? config.embedBuilder
-        : {};
+    const embedConfig = ensureEmbedConfig(config);
+    for (const entry of Object.values(embedConfig.embeds)) {
+        const guildId = sanitizeSnowflakeId(entry?.guildId);
+        if (guildId) set.add(guildId);
+    }
     if (Array.isArray(config.mainServerIds)) {
         for (const id of config.mainServerIds) {
             const cleaned = sanitizeSnowflakeId(id);
@@ -843,9 +1109,68 @@ function collectEligibleGuildIds(config) {
     }
     const logging = sanitizeSnowflakeId(config.loggingServerId);
     if (logging) set.add(logging);
-    const configuredGuild = sanitizeSnowflakeId(embedConfig.guildId);
-    if (configuredGuild) set.add(configuredGuild);
     return Array.from(set);
+}
+
+function normalizeEmbedEntry(value, fallbackName) {
+    const entry = {
+        name: sanitizePresetName(value?.name, fallbackName ?? DEFAULT_PRESET_NAME),
+        guildId: sanitizeSnowflakeId(value?.guildId) ?? null,
+        channelId: sanitizeSnowflakeId(value?.channelId) ?? null,
+        preface: sanitizeText(value?.preface, 2000),
+        embed: {
+            color: resolveColor(value?.embed?.color) ?? DEFAULT_COLOR,
+            title: sanitizeText(value?.embed?.title, 256),
+            description: sanitizeText(value?.embed?.description, DESCRIPTION_MAX_LENGTH)
+        },
+        buttons: Array.isArray(value?.buttons)
+            ? value.buttons
+            .map(btn => ({
+                label: sanitizeButtonLabel(btn?.label),
+                url: sanitizeButtonUrl(btn?.url)
+            }))
+            .filter(btn => btn.label && btn.url)
+            .slice(0, BUTTON_LIMIT)
+            : []
+    };
+    return entry;
+}
+
+function sanitizePresetName(value, fallback = DEFAULT_PRESET_NAME) {
+    if (typeof value !== 'string') {
+        return fallback;
+    }
+    const trimmed = value.trim();
+    if (!trimmed) {
+        return fallback;
+    }
+    return trimmed.slice(0, PRESET_NAME_MAX_LENGTH);
+}
+
+function sanitizePresetKey(value) {
+    if (typeof value !== 'string') return null;
+    const trimmed = value.trim().toLowerCase();
+    if (!trimmed) return null;
+    const slug = trimmed
+        .replace(/[^a-z0-9-]+/g, '-');
+    const cleaned = slug.replace(/^-+|-+$/g, '').slice(0, 48);
+    return cleaned || null;
+}
+
+function generatePresetKey(name, existingKeys) {
+    const base = sanitizePresetKey(name) || 'preset';
+    if (!existingKeys.includes(base)) {
+        return base;
+    }
+    let suffix = 2;
+    while (suffix < 1000) {
+        const candidate = `${base}-${suffix}`.slice(0, 48);
+        if (!existingKeys.includes(candidate)) {
+            return candidate;
+        }
+        suffix += 1;
+    }
+    return `${base}-${Date.now()}`.slice(0, 48);
 }
 
 function resolveColor(input) {
