@@ -8,6 +8,9 @@ Secrets never live in git; they come from the server environment at deploy.
 — Config model: derived from server env; no plaintext secrets in the repo.
 
 ## Setup panel architecture primer
+- Any time you touch a feature module (new or existing) in a way that requires setup integration, automatically create or update
+  the companion `setup.js` factory and wire it into `/setup` so the panel keeps working without being prompted. The expectation
+  is that agents ship the setup scaffolding alongside the module change every time.
 - The `/setup` slash command lives in `src/features/setup/index.js`. During `init` it instantiates each module’s factory (for example `createLoggingSetup`, `createWelcomeSetup`, etc.) from the module’s `setup.js` file and hands them shared helpers such as `panelStore`, `saveConfig`, and `fetchGuild`.
 - Every module-specific factory must return at least `prepareConfig`, `buildView`, and `handleInteraction`. The setup feature calls `prepareConfig` inside `ensureConfigShape` before interactions start so each module’s expected config shape is normalised.
 - When a user opens a module from the home panel, the setup feature calls that module’s `buildView(...)` to render the initial embed/components and caches the resulting message + state in `panelStore` under a `${userId}:${module}` key.
