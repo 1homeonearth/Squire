@@ -4,6 +4,8 @@ Squire is a multi-feature Discord bot that keeps the Unbreakable Crown server ne
 
 The project is written in modern ECMAScript modules on top of [`discord.js` v14](https://discord.js.org/#/docs/discord.js/main/general/welcome) and runs on Node.js 22 or newer. Feature modules live in `src/features/*` and are dynamically discovered at startup so that functionality can grow without touching the core runtime.
 
+Squire persists runtime state in a LokiJS database. During shutdown it now waits for the database save callback to finish before exiting so recent writes are not lost when the process stops.
+
 ## Getting the code
 
 Clone the repository with Git:
