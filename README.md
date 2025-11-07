@@ -35,6 +35,9 @@ cd Squire-main
   - Instantly bans unverified accounts whose username, display name, or global name contains known spam terms (mega/megas/link/links by default).
   - Optional notification channel/webhooks + verified-role exemptions so trusted members or staff can bypass the filter.
   - Persists every decision (success, permission failure, unexpected error) to the LokiJS database for auditability.
+- **Global ban command** (`src/features/global-ban/`)
+  - Adds the `/ban` slash command that accepts a user and optional reason, then propagates the ban across every managed server (main servers, the logging hub, and any other guild Squire is present in).
+  - Requires the **Ban Members** permission, safeguards against missing permissions per guild, and reports which servers succeeded, already had the ban, or failed.
 - **Rainbow Bridge** (`src/features/rainbow-bridge/`)
   - Mirrors messages, edits, and deletions across linked channels spanning multiple guilds.
   - Supports per-bridge overrides for bot forwarding, friendly bridge names, and automatic embed cleanup for rich media.
