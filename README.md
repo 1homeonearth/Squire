@@ -64,6 +64,8 @@ The `/setup` command is orchestrated by `src/features/setup/index.js`. During `i
 
 Shared UI helpers (`appendHomeButtonRow`, channel/role formatting, ID sanitation, webhook validation, etc.) live in `src/features/setup/shared.js` so feature authors can reuse consistent building blocks. When you add a new module with settings, include a companion `setup.js` that exports `create<Module>Setup`, update the module dropdown in `buildHomeView(...)`, and lean on the shared helpers for consistent UX. With that file in place, the setup command automatically recognises the module and populates its panels with your custom view/interaction logic.
 
+Whenever you modify an existing module or introduce a new one, ship any required setup wiring in the same change. That means ensuring the module's `setup.js` factory exposes the right hooks, registering it with the `/setup` selector, and backfilling defaults so the panel stays functional without additional follow-up work.
+
 ## Repository layout
 
 ```
