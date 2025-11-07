@@ -47,10 +47,12 @@ cd Squire-main
   - Ships the `/xp set` moderator command for adjusting a member's total and persists totals in LokiJS collections.
 - **Embed builder** (`src/features/embed-builder/`)
   - Lets staff compose reusable announcement embeds (preface text, color, title, description) and up to five HTTPS buttons directly from `/setup`.
+  - Supports multiple named presets per guild so announcements can be saved, duplicated, renamed, and deleted without losing older layouts.
   - Stores the latest configuration in `config.embedBuilder` so announcements can be posted consistently across guilds.
 - **Playlist relay** (`src/features/playlists/`)
   - Adds the `/add` command for piping Spotify tracks or YouTube videos into shared playlists using OAuth credentials.
   - Mirrors the cleaned link back into the invoking channel via managed webhooks while preserving Discord's native YouTube player.
+  - Attempts to mirror each submission onto the opposite platform when the artist/title can be matched exactly (Spotify ↔ YouTube), reporting when a match cannot be found.
   - Configure Spotify/YouTube client credentials and the duplicate-skipping toggle directly from the `/setup` panel instead of editing JSON by hand.
 - **Setup panel** (`src/features/setup/`)
   - Provides the `/setup` slash command that gives admins an in-Discord control panel for every module.
@@ -66,7 +68,62 @@ The `/setup` command is orchestrated by `src/features/setup/index.js`. During `i
 
 Shared UI helpers (`appendHomeButtonRow`, channel/role formatting, ID sanitation, webhook validation, etc.) live in `src/features/setup/shared.js` so feature authors can reuse consistent building blocks. When you add a new module with settings, include a companion `setup.js` that exports `create<Module>Setup`, update the module dropdown in `buildHomeView(...)`, and lean on the shared helpers for consistent UX. With that file in place, the setup command automatically recognises the module and populates its panels with your custom view/interaction logic.
 
+The central `src/features/setup/index.js` no longer exposes per-module view builders or interaction handlers; tests and follow-up features should import each module's `setup.js` factory directly when they need to exercise individual workflows.
+
 Whenever you modify an existing module or introduce a new one, ship any required setup wiring in the same change. That means ensuring the module's `setup.js` factory exposes the right hooks, registering it with the `/setup` selector, and backfilling defaults so the panel stays functional without additional follow-up work.
+
+## Setup panel workflows by module
+
+Each `/setup` view ships with focused controls tailored to its feature module. Use the notes below as a quick-reference while configuring a server:
+
+### Logging forwarder
+1. Open `/setup` → **Logging forwarder** and pick a source guild from the "Select a main server…" menu. Only IDs listed under `mainServerIds` appear here.
+2. Click **Link this server** to choose the logging hub channel. Squire fetches text channels and writes the mapping to `config.mapping[guildId]`.
+3. Use **Configure categories** to assign dedicated channels for each logging category (messages, moderation, joins, system). The follow-up menu lists the hub categories with `⚠️` markers where a destination is missing.
+4. Click **Manage exclusions** to blacklist noisy channels or whole categories per guild — the selections hydrate `config.excludeChannels`/`excludeCategories`.
+5. Flip **Enable/Disable bot forwards** and **Set sample rate** to manage volume. Sample rates accept `0-1` decimals (e.g. `0.25` for 25%).
+6. Use **Refresh view** after large edits or webhook maintenance to re-sync the summary embed.
+
+### Welcome cards
+1. Open `/setup` → **Welcome cards** and select a guild from the dropdown.
+2. Toggle **Enable module/Disable module** to control whether join cards post for that server.
+3. Tap **Configure channels** to pick welcome/leave channels and the optional rules/reminder jump links.
+4. Use **Edit welcome message** to launch the modal for the text template. The preview embed updates instantly.
+5. The roles sub-panel lets you mark auto-role grants and the "recent arrivals" role via the **Refresh roles** button if Discord roles were added after `/setup` launched.
+
+### Rainbow Bridge
+1. Open `/setup` → **Rainbow bridge**. Press **Create bridge** to open the modal — supply a unique bridge ID (letters/numbers/-/_), optional display name, and description.
+2. Pick a bridge from the select menu and click **Manage bridge** to view its per-guild forms.
+3. Use **Add channel** to provide a guild ID, channel ID, and optional webhook override. Existing forms show a ✅ status per guild.
+4. Click **Remove channel** to prune a guild from the bridge or **Delete bridge** to tear it down entirely (confirmation required).
+5. Toggle **Enable/Disable bot mirroring** to override the default `forwardBots` flag per bridge.
+
+### Auto bouncer
+1. Open `/setup` → **Autobouncer** and pick a guild.
+2. Toggle **Enable/Disable** to control whether the filter runs and **Enable/Disable bio scan** to include bio checks.
+3. Tap **Edit keywords** to edit the newline-separated block list. The modal normalises to lowercase and trims duplicates.
+4. Use the channel dropdown to pick a notification channel and the webhook modal to add external webhooks if desired.
+5. The **Refresh roles** button reloads Discord roles so you can assign test roles for dry runs; clear individual test role assignments with **Clear test role**.
+
+### Experience system
+1. Open `/setup` → **Experience** and pick the guild to manage. Rules display in the top select menu.
+2. Use **Add rule set**/**Delete rule set** to manage rule templates per guild (one active rule minimum). Each rule contains toggles for message/voice/reaction XP, reset policies, and channel blacklists.
+3. Click **Edit general** for XP amounts/cooldowns, **Edit rewards** for level rewards, **Edit blacklists** for channel/role exclusions, and **Edit display** for leaderboard settings.
+4. **Use current channel** captures the invoking channel ID for the level-up announcer shortcut.
+
+### Embed builder
+1. Open `/setup` → **Embed builder**. The **Select embed preset…** menu lists named presets; use **Create preset**, **Rename preset**, or **Delete preset** options from the same select to manage them. Every preset keeps its own guild/channel.
+2. Pick a server in **Select target server…** and click **Set channel** to choose the posting destination (text channels only).
+3. Use **Set pre-text**, **Set title**, and **Set content** to open modals for each field. Color selection lives under **Select embed color…**.
+4. Manage buttons via **Manage buttons** → **Add link button** or **Clear buttons** (max five HTTPS buttons). The removal multi-select trims selected entries.
+5. Click **Post embed** to send the embed immediately to the configured channel. Squire logs failures and replies with the status.
+
+### Playlists
+1. Open `/setup` → **Playlists**. The top section shows credential health for Spotify and YouTube.
+2. Hit **Configure Spotify credentials** or **Configure YouTube credentials** to enter client IDs/secrets, refresh tokens, and fallback playlist IDs in modal fields.
+3. Toggle **Skip duplicates: On/Off** to determine whether Spotify skips tracks already present before posting.
+4. Pick a main server from the dropdown to edit per-guild playlist IDs, then click **Set Spotify playlist** or **Set YouTube playlist** to save the IDs for that server.
+5. Once both platforms are configured, `/add` mirrors submissions to both playlists whenever an exact artist/title match is found (reporting when matches cannot be located).
 
 ## Repository layout
 
@@ -274,13 +331,84 @@ Each bridge entry supports:
 
 #### Embed Builder (`config.embedBuilder`)
 
-| Key | Type | Required? | Notes |
-| --- | --- | --- | --- |
-| `guildId` | string \| null | Optional | Last guild opened in `/setup`. |
-| `channelId` | string \| null | Optional | Target channel for the "Post embed" action. |
-| `preface` | string | Optional | Message content posted before the embed. Truncated to 2,000 characters. |
-| `embed` | object | Optional | `{ color, title, description }`, all strings. Color accepts hex codes or named swatches. |
-| `buttons` | array | Optional | Each entry is `{ label, url }` (HTTPS only), up to five buttons total. |
+`config.embedBuilder` stores a library of named embed presets that the `/setup` panel can edit and post. The object exposes:
+
+- `activeKey` (string): preset key that opens by default in `/setup`.
+- `embeds` (object): map of preset keys to preset definitions. Each preset contains:
+  - `name` (string): display name shown in the preset selector.
+  - `guildId` (string \| null): default guild whose channels appear in the selector for this preset.
+  - `channelId` (string \| null): target channel used when "Post embed" is pressed.
+  - `preface` (string): optional message content sent before the embed (2,000 character limit).
+  - `embed` (object): `{ color, title, description }` where `color` accepts hex or named swatches and text fields trim to Discord limits.
+- `buttons` (array): up to five link buttons with `{ label, url }` payloads (HTTPS required).
+
+#### Playlists (`config.playlists`)
+
+The playlist relay keeps Spotify and YouTube credentials alongside per-guild playlist targets.
+
+- `spotify`
+  - `clientId`, `clientSecret`, `refreshToken`: OAuth credentials (sourced from the environment).
+  - `playlistId`: optional fallback playlist used when a guild override is missing.
+  - `skipDupes`: string/boolean flag honoured by `/setup` and the runtime when checking for duplicates.
+  - `guilds`: map of guild IDs to `{ playlistId, name? }` entries. Blank IDs are valid placeholders until configured via `/setup`.
+- `youtube`
+  - `clientId`, `clientSecret`, `refreshToken`: OAuth credentials.
+  - `playlistId`: optional fallback playlist ID.
+  - `guilds`: map of guild IDs to `{ playlistId, name? }` entries.
+
+### Using the `/setup` module
+
+Every module exposes a guided workflow inside `/setup`. The key behaviours are:
+
+#### Autobouncer
+
+- Choose the module and pick a server from the dropdown to configure server-specific overrides.
+- Use **Enable/Disable** to toggle the bouncer, and **Toggle bio scanning** to include or ignore profile bios when matching usernames.
+- Click **Edit blocked keywords** to open a modal—enter one keyword per line; they are stored in lowercase automatically.
+- The **Manage test roles** view lets you fetch guild roles and assign a temporary “test” role via a select menu; clearing the assignment removes the override.
+- Channel/webhook pickers allow you to route ban notifications; any updates save immediately.
+
+#### Embed Builder
+
+- The preset selector at the top lists every saved embed. Use the action options in the menu to create, rename, or delete presets. Each preset keeps its own guild, channel, preface text, embed body, and buttons.
+- Buttons underneath manage the embed content: set target channel, edit pre-text/title/description, adjust colours, and manage up to five link buttons.
+- The **Post embed** action delivers the current preset to the configured channel. Changes are written to `config.json` as soon as they are made.
+
+#### Experience
+
+- Pick a guild to load its XP rules. The overview lists existing rules with options to activate, duplicate, or remove them.
+- Editing a rule opens dedicated sub-views for message, voice, and reaction gains, cooldowns, level-up messaging, leaderboards, and blacklists. Each sub-view saves instantly when you toggle switches or submit modals.
+- Use the rule actions to add new blocks, reorder entries, or reset to defaults; the setup module normalises IDs and cooldown values for you.
+
+#### Logging Forwarder
+
+- Select a source guild to view or create its mapping to the logging server. **Link this server** opens a channel picker scoped to the logging guild so you can choose a destination channel.
+- The **Manage categories** flow lets you assign per-category output channels for message, moderation, join, and system logs.
+- **Manage exclusions** surfaces modal-driven lists for channel/category exclusions so noisy sources can be ignored.
+- Use **Forward bot messages** and **Sampling rate** to control global behaviour. All selectors enforce Discord permissions and prevent picking channels the bot cannot see.
+
+#### Moderation Commands
+
+- Pick any guild the bot can manage. The role multi-select lists all available roles (with missing-role markers when necessary) so you can grant or revoke access to moderation slash commands.
+- The view shows a live summary of selected roles and reminds you that Administrator/Manage Server users always retain access.
+
+#### Playlists
+
+- Select one of the configured `mainServerIds` to focus the editor. The embed lists credential health plus the Spotify/YouTube playlist IDs currently associated with that guild.
+- Use **Set Spotify playlist** or **Set YouTube playlist** to open per-guild modals where you can paste the playlist ID (leave blank to clear).
+- Configure platform credentials through their respective modals and toggle Spotify duplicate detection as needed. The home row returns to the setup selector.
+
+#### Rainbow Bridge
+
+- The overview lists existing bridges with controls to rename them, toggle bot forwarding, or delete them.
+- Opening a bridge reveals per-guild forms where you can select source channels, threads, and webhook endpoints. The module normalises IDs and backfills missing forms for any guilds in `mainServerIds`.
+- Use the **Add form** action to connect new guilds, and the provided buttons to copy webhook templates or remove obsolete entries.
+
+#### Welcome Cards
+
+- Choose a guild to edit, then step through the tabs to configure welcome channel, role assignments, and the welcome message template.
+- Channel and role selections use filtered dropdowns. Editing the message opens a modal with placeholder hints (`{username}`, `{server}`, etc.); the preview updates instantly once you submit.
+- Buttons are provided to toggle the module, reset to defaults, or return to the guild selector.
 
 ### Examples
 
@@ -352,17 +480,50 @@ Full example with explicit overrides:
     }
   },
   "embedBuilder": {
-    "guildId": "123456789012345678",
-    "channelId": "889900112233445566",
-    "preface": "@here Patch notes are live!",
-    "embed": {
-      "color": "#5865F2",
-      "title": "Season Update",
-      "description": "Highlights and fixes for this release."
+    "activeKey": "announcements",
+    "embeds": {
+      "announcements": {
+        "name": "Announcements",
+        "guildId": "123456789012345678",
+        "channelId": "889900112233445566",
+        "preface": "@here Patch notes are live!",
+        "embed": {
+          "color": "#5865F2",
+          "title": "Season Update",
+          "description": "Highlights and fixes for this release."
+        },
+        "buttons": [
+          { "label": "Read more", "url": "https://example.com/patch" }
+        ]
+      }
+    }
+  },
+  "playlists": {
+    "spotify": {
+      "clientId": "$ENV{SPOTIFY_CLIENT_ID}",
+      "clientSecret": "$ENV{SPOTIFY_CLIENT_SECRET}",
+      "refreshToken": "$ENV{SPOTIFY_REFRESH_TOKEN}",
+      "playlistId": "$ENV{SPOTIFY_PLAYLIST_ID}",
+      "skipDupes": "$ENV{PLAYLISTS_SKIP_DUPES}",
+      "guilds": {
+        "123456789012345678": {
+          "playlistId": "5AbCDeFgHiJkLmNo",
+          "name": "Main soundtrack"
+        }
+      }
     },
-    "buttons": [
-      { "label": "Read more", "url": "https://example.com/patch" }
-    ]
+    "youtube": {
+      "clientId": "$ENV{YT_CLIENT_ID}",
+      "clientSecret": "$ENV{YT_CLIENT_SECRET}",
+      "refreshToken": "$ENV{YT_REFRESH_TOKEN}",
+      "playlistId": "$ENV{YT_PLAYLIST_ID}",
+      "guilds": {
+        "123456789012345678": {
+          "playlistId": "PLabc123XYZ",
+          "name": "Video digest"
+        }
+      }
+    }
   }
 }
 ```

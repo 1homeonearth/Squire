@@ -119,27 +119,132 @@ function playlistUrlForPlatform(platform, playlistId) {
     return null;
 }
 
+function sanitizeSongComponent(value) {
+    if (typeof value !== 'string') return '';
+    return value
+        .replace(/["“”‘’]/g, '')
+        .replace(/\s*[\(\[\{][^\)\]\}]*[\)\]\}]\s*/g, ' ')
+        .replace(/\s+/g, ' ')
+        .trim();
+}
+
+function removeFeaturingClauses(value) {
+    if (!value) return '';
+    return value.replace(/\b(feat\.?|ft\.?)\b.*$/i, '').trim();
+}
+
+function normalizeSongKey(value) {
+    const sanitized = sanitizeSongComponent(value);
+    if (!sanitized) return '';
+    return removeFeaturingClauses(sanitized)
+        .replace(/&/g, 'and')
+        .replace(/[^\p{L}\p{N}]+/gu, ' ')
+        .toLowerCase()
+        .replace(/\s+/g, ' ')
+        .trim();
+}
+
+function normalizeArtistKey(value) {
+    const base = typeof value === 'string' ? value.replace(/-\s*topic$/i, '') : '';
+    const sanitized = sanitizeSongComponent(base);
+    if (!sanitized) return '';
+    return sanitized
+        .replace(/&/g, 'and')
+        .replace(/[^\p{L}\p{N}]+/gu, ' ')
+        .toLowerCase()
+        .replace(/\s+/g, ' ')
+        .trim();
+}
+
+function parseYouTubeSongMetadata(snippet = {}) {
+    const rawTitle = sanitizeSongComponent(snippet.title ?? '');
+    if (!rawTitle) {
+        return null;
+    }
+    const parts = rawTitle.split(/\s*[-–—]\s*/);
+    if (parts.length >= 2) {
+        const artist = removeFeaturingClauses(sanitizeSongComponent(parts[0]));
+        const title = removeFeaturingClauses(sanitizeSongComponent(parts.slice(1).join(' - ')));
+        if (artist && title) {
+            return { artist, title };
+        }
+    }
+    const channelTitle = sanitizeSongComponent(snippet.channelTitle ?? '');
+    if (channelTitle) {
+        const artist = removeFeaturingClauses(channelTitle);
+        if (artist && rawTitle) {
+            return { artist, title: removeFeaturingClauses(rawTitle) };
+        }
+    }
+    return null;
+}
+
+function buildSpotifySongMetadata(track) {
+    const title = sanitizeSongComponent(track?.name ?? '');
+    const artists = Array.isArray(track?.artists)
+        ? track.artists.map(entry => sanitizeSongComponent(entry?.name ?? '')).filter(Boolean)
+        : [];
+    return {
+        title,
+        artist: artists[0] ?? '',
+        artists
+    };
+}
+
+function normalizeGuildPlaylists(source, platform) {
+    const map = {};
+    if (!source || typeof source !== 'object') {
+        return map;
+    }
+    for (const [guildId, raw] of Object.entries(source)) {
+        const id = pickString(guildId);
+        if (!id) continue;
+        let playlistId = null;
+        let name = null;
+        if (typeof raw === 'string') {
+            playlistId = pickString(raw);
+        } else if (raw && typeof raw === 'object') {
+            playlistId = pickString(raw.playlistId);
+            name = pickString(raw.name);
+        }
+        map[id] = {
+            playlistId,
+            playlistUrl: playlistId ? playlistUrlForPlatform(platform, playlistId) : null,
+            name
+        };
+    }
+    return map;
+}
+
 export function normalizePlaylistsConfig(source = {}) {
     const cfg = source && typeof source === 'object' ? { ...source } : {};
 
     const spotifyRaw = cfg.spotify && typeof cfg.spotify === 'object' ? cfg.spotify : {};
     const youtubeRaw = cfg.youtube && typeof cfg.youtube === 'object' ? cfg.youtube : {};
 
+    const spotifyGuilds = normalizeGuildPlaylists(spotifyRaw.guilds ?? {}, 'spotify');
+    const youtubeGuilds = normalizeGuildPlaylists(youtubeRaw.guilds ?? {}, 'youtube');
+
+    const spotifyFallbackId = pickString(spotifyRaw.playlistId, process.env.SPOTIFY_PLAYLIST_ID);
+    const youtubeFallbackId = pickString(youtubeRaw.playlistId, process.env.YT_PLAYLIST_ID);
+
     const spotify = (() => {
         const clientId = pickString(spotifyRaw.clientId, process.env.SPOTIFY_CLIENT_ID);
         const clientSecret = pickString(spotifyRaw.clientSecret, process.env.SPOTIFY_CLIENT_SECRET);
         const refreshToken = pickString(spotifyRaw.refreshToken, process.env.SPOTIFY_REFRESH_TOKEN);
-        const playlistId = pickString(spotifyRaw.playlistId, process.env.SPOTIFY_PLAYLIST_ID);
-        if (!clientId || !clientSecret || !refreshToken || !playlistId) return null;
+        if (!clientId || !clientSecret || !refreshToken) return null;
         const skipSource = spotifyRaw.skipDupes ?? process.env.PLAYLISTS_SKIP_DUPES;
         const skipDupes = parseBoolean(skipSource, false);
         return {
             clientId,
             clientSecret,
             refreshToken,
-            playlistId,
             skipDupes,
-            playlistUrl: playlistUrlForPlatform('spotify', playlistId)
+            fallback: spotifyFallbackId ? {
+                playlistId: spotifyFallbackId,
+                playlistUrl: playlistUrlForPlatform('spotify', spotifyFallbackId)
+            } : null,
+            guilds: spotifyGuilds
         };
     })();
 
@@ -147,14 +252,16 @@ export function normalizePlaylistsConfig(source = {}) {
         const clientId = pickString(youtubeRaw.clientId, process.env.YT_CLIENT_ID);
         const clientSecret = pickString(youtubeRaw.clientSecret, process.env.YT_CLIENT_SECRET);
         const refreshToken = pickString(youtubeRaw.refreshToken, process.env.YT_REFRESH_TOKEN);
-        const playlistId = pickString(youtubeRaw.playlistId, process.env.YT_PLAYLIST_ID);
-        if (!clientId || !clientSecret || !refreshToken || !playlistId) return null;
+        if (!clientId || !clientSecret || !refreshToken) return null;
         return {
             clientId,
             clientSecret,
             refreshToken,
-            playlistId,
-            playlistUrl: playlistUrlForPlatform('youtube', playlistId)
+            fallback: youtubeFallbackId ? {
+                playlistId: youtubeFallbackId,
+                playlistUrl: playlistUrlForPlatform('youtube', youtubeFallbackId)
+            } : null,
+            guilds: youtubeGuilds
         };
     })();
 
@@ -182,9 +289,9 @@ class SpotifyIntegration {
         this.clientId = config.clientId;
         this.clientSecret = config.clientSecret;
         this.refreshToken = config.refreshToken;
-        this.playlistId = config.playlistId;
         this.skipDupes = Boolean(config.skipDupes);
-        this.playlistUrl = config.playlistUrl;
+        this.guilds = config.guilds ?? {};
+        this.fallback = config.fallback ?? null;
         this.logger = logger;
         this.accessToken = null;
         this.expiresAt = 0;
@@ -290,10 +397,10 @@ class SpotifyIntegration {
         return await res.json();
     }
 
-    async trackExists(trackId) {
-        if (!this.skipDupes) return false;
+    async trackExists(trackId, playlistId) {
+        if (!this.skipDupes || !playlistId) return false;
         const targetUri = `${this.trackUriBase}${trackId}`;
-        let url = `https://api.spotify.com/v1/playlists/${this.playlistId}/tracks?fields=items(track(uri)),next&limit=100`;
+        let url = `https://api.spotify.com/v1/playlists/${playlistId}/tracks?fields=items(track(uri)),next&limit=100`;
         let pages = 0;
         while (url && pages < 5) {
             const res = await this.request(url, { method: 'GET' });
@@ -311,24 +418,46 @@ class SpotifyIntegration {
         return false;
     }
 
-    async addTrack(trackId) {
+    resolvePlaylist(guildId) {
+        if (guildId && this.guilds[guildId]?.playlistId) {
+            const entry = this.guilds[guildId];
+            return {
+                playlistId: entry.playlistId,
+                playlistUrl: entry.playlistUrl ?? playlistUrlForPlatform('spotify', entry.playlistId)
+            };
+        }
+        return this.fallback ?? null;
+    }
+
+    async addTrack(trackId, guildId) {
+        const playlist = this.resolvePlaylist(guildId);
+        if (!playlist?.playlistId) {
+            throw new PlaylistError('Spotify playlist not configured for this server.', {
+                platform: 'spotify',
+                code: 'playlistMissing',
+                userMessage: 'Configure the Spotify playlist for this server in `/setup` before adding tracks.'
+            });
+        }
         const track = await this.fetchTrack(trackId);
         const trackTitle = formatSpotifyTitle(track);
         const trackUri = `${this.trackUriBase}${trackId}`;
+        const songMetadata = buildSpotifySongMetadata(track);
 
-        if (await this.trackExists(trackId)) {
+        if (await this.trackExists(trackId, playlist.playlistId)) {
             return {
                 platform: 'spotify',
                 title: trackTitle,
-                playlistUrl: this.playlistUrl,
+                playlistUrl: playlist.playlistUrl,
                 trackId,
                 skipped: true,
-                trackUri
+                trackUri,
+                playlistId: playlist.playlistId,
+                songMetadata
             };
         }
 
         const body = JSON.stringify({ uris: [trackUri] });
-        const res = await this.request(`https://api.spotify.com/v1/playlists/${this.playlistId}/tracks`, {
+        const res = await this.request(`https://api.spotify.com/v1/playlists/${playlist.playlistId}/tracks`, {
             method: 'POST',
             body
         });
@@ -355,12 +484,51 @@ class SpotifyIntegration {
         return {
             platform: 'spotify',
             title: trackTitle,
-            playlistUrl: this.playlistUrl,
+            playlistUrl: playlist.playlistUrl,
             snapshotId: data.snapshot_id ?? null,
             trackId,
             trackUri,
-            skipped: false
+            skipped: false,
+            playlistId: playlist.playlistId,
+            songMetadata
         };
+    }
+
+    async findMatchingTrack({ title, artist }) {
+        const normalizedTitle = normalizeSongKey(title);
+        const normalizedArtist = normalizeArtistKey(artist);
+        if (!normalizedTitle || !normalizedArtist) {
+            return null;
+        }
+
+        const params = new URLSearchParams();
+        params.set('type', 'track');
+        params.set('limit', '5');
+        const queryTitle = sanitizeSongComponent(title).replace(/"/g, '');
+        const queryArtist = sanitizeSongComponent(artist).replace(/"/g, '');
+        params.set('q', `track:"${queryTitle}" artist:"${queryArtist}"`);
+
+        const res = await this.request(`https://api.spotify.com/v1/search?${params.toString()}`, { method: 'GET' });
+        if (!res.ok) {
+            const details = await safeJson(res);
+            const message = details?.error?.message || res.statusText || 'Unknown error';
+            this.logger?.warn?.(`[playlists] Spotify search failed for ${artist} — ${title}: ${message}`);
+            return null;
+        }
+
+        const data = await res.json();
+        const tracks = Array.isArray(data?.tracks?.items) ? data.tracks.items : [];
+        for (const track of tracks) {
+            const trackTitle = normalizeSongKey(track?.name ?? '');
+            if (!trackTitle) continue;
+            const artists = Array.isArray(track?.artists)
+                ? track.artists.map(entry => normalizeArtistKey(entry?.name ?? '')).filter(Boolean)
+                : [];
+            if (trackTitle === normalizedTitle && artists.includes(normalizedArtist)) {
+                return track;
+            }
+        }
+        return null;
     }
 }
 
@@ -369,8 +537,8 @@ class YouTubeIntegration {
         this.clientId = config.clientId;
         this.clientSecret = config.clientSecret;
         this.refreshToken = config.refreshToken;
-        this.playlistId = config.playlistId;
-        this.playlistUrl = config.playlistUrl;
+        this.guilds = config.guilds ?? {};
+        this.fallback = config.fallback ?? null;
         this.logger = logger;
         this.accessToken = null;
         this.expiresAt = 0;
@@ -482,12 +650,32 @@ class YouTubeIntegration {
         return item;
     }
 
-    async addVideo(videoId) {
+    resolvePlaylist(guildId) {
+        if (guildId && this.guilds[guildId]?.playlistId) {
+            const entry = this.guilds[guildId];
+            return {
+                playlistId: entry.playlistId,
+                playlistUrl: entry.playlistUrl ?? playlistUrlForPlatform('youtube', entry.playlistId)
+            };
+        }
+        return this.fallback ?? null;
+    }
+
+    async addVideo(videoId, guildId) {
+        const playlist = this.resolvePlaylist(guildId);
+        if (!playlist?.playlistId) {
+            throw new PlaylistError('YouTube playlist not configured for this server.', {
+                platform: 'youtube',
+                code: 'playlistMissing',
+                userMessage: 'Configure the YouTube playlist for this server in `/setup` before adding videos.'
+            });
+        }
         const video = await this.fetchVideo(videoId);
         const title = video?.snippet?.title ?? `Video ${videoId}`;
+        const metadata = parseYouTubeSongMetadata(video?.snippet ?? {});
         const body = JSON.stringify({
             snippet: {
-                playlistId: this.playlistId,
+                playlistId: playlist.playlistId,
                 resourceId: {
                     kind: 'youtube#video',
                     videoId
@@ -542,11 +730,60 @@ class YouTubeIntegration {
         return {
             platform: 'youtube',
             title,
-            playlistUrl: this.playlistUrl,
+            playlistUrl: playlist.playlistUrl,
             playlistItemId: data?.id ?? null,
             videoId,
-            skipped: false
+            skipped: false,
+            playlistId: playlist.playlistId,
+            songMetadata: metadata ? { title: metadata.title, artist: metadata.artist } : null,
+            originalTitle: video?.snippet?.title ?? title
         };
+    }
+
+    async findMatchingVideo({ title, artist }) {
+        const normalizedTitle = normalizeSongKey(title);
+        const normalizedArtist = normalizeArtistKey(artist);
+        if (!normalizedTitle || !normalizedArtist) {
+            return null;
+        }
+
+        const params = new URLSearchParams();
+        params.set('part', 'snippet');
+        params.set('type', 'video');
+        params.set('maxResults', '5');
+        const queryTitle = sanitizeSongComponent(title);
+        const queryArtist = sanitizeSongComponent(artist);
+        params.set('q', `${queryArtist} ${queryTitle}`);
+
+        const res = await this.request(`https://www.googleapis.com/youtube/v3/search?${params.toString()}`, { method: 'GET' });
+        if (!res.ok) {
+            const details = await safeJson(res);
+            const reason = extractYouTubeReason(details) ?? res.statusText ?? 'Unknown error';
+            this.logger?.warn?.(`[playlists] YouTube search failed for ${artist} — ${title}: ${reason}`);
+            return null;
+        }
+
+        const data = await res.json();
+        const items = Array.isArray(data?.items) ? data.items : [];
+        for (const item of items) {
+            const videoId = item?.id?.videoId ?? null;
+            if (!videoId) continue;
+            const snippet = item?.snippet ?? {};
+            const parsed = parseYouTubeSongMetadata(snippet);
+            if (parsed) {
+                const parsedTitle = normalizeSongKey(parsed.title);
+                const parsedArtist = normalizeArtistKey(parsed.artist);
+                if (parsedTitle === normalizedTitle && parsedArtist === normalizedArtist) {
+                    return { videoId, snippet };
+                }
+            }
+            const channelMatch = normalizeArtistKey(snippet.channelTitle ?? '');
+            const titleMatch = normalizeSongKey(snippet.title ?? '');
+            if (titleMatch === normalizedTitle && channelMatch === normalizedArtist) {
+                return { videoId, snippet };
+            }
+        }
+        return null;
     }
 }
 
@@ -695,7 +932,82 @@ export class WebhookRelayManager {
     }
 }
 
-export async function routeToPlatform(parsed, integrations) {
+function mirrorErrorMessage(err) {
+    if (err instanceof PlaylistError) {
+        return err.userMessage ?? err.message;
+    }
+    if (err?.message) {
+        return err.message;
+    }
+    return String(err ?? 'Unknown error');
+}
+
+async function mirrorSpotifyTrackToYouTube({ primary, youtube, guildId }) {
+    if (!primary?.songMetadata) {
+        return { platform: 'youtube', status: 'metadataMissing' };
+    }
+    const { title, artist } = primary.songMetadata;
+    if (!title || !artist) {
+        return { platform: 'youtube', status: 'metadataMissing' };
+    }
+
+    let match;
+    try {
+        match = await youtube.findMatchingVideo({ title, artist });
+    } catch (err) {
+        return { platform: 'youtube', status: 'error', message: mirrorErrorMessage(err) };
+    }
+
+    if (!match?.videoId) {
+        return { platform: 'youtube', status: 'notFound' };
+    }
+
+    try {
+        const addition = await youtube.addVideo(match.videoId, guildId);
+        return {
+            platform: 'youtube',
+            status: addition.skipped ? 'skipped' : 'added',
+            title: addition.title,
+            playlistUrl: addition.playlistUrl,
+            videoId: addition.videoId
+        };
+    } catch (err) {
+        return { platform: 'youtube', status: 'error', message: mirrorErrorMessage(err) };
+    }
+}
+
+async function mirrorYouTubeVideoToSpotify({ primary, spotify, guildId }) {
+    const metadata = primary?.songMetadata;
+    if (!metadata?.title || !metadata?.artist) {
+        return { platform: 'spotify', status: 'metadataMissing' };
+    }
+
+    let track;
+    try {
+        track = await spotify.findMatchingTrack({ title: metadata.title, artist: metadata.artist });
+    } catch (err) {
+        return { platform: 'spotify', status: 'error', message: mirrorErrorMessage(err) };
+    }
+
+    if (!track?.id) {
+        return { platform: 'spotify', status: 'notFound' };
+    }
+
+    try {
+        const addition = await spotify.addTrack(track.id, guildId);
+        return {
+            platform: 'spotify',
+            status: addition.skipped ? 'skipped' : 'added',
+            title: addition.title,
+            playlistUrl: addition.playlistUrl,
+            trackId: addition.trackId
+        };
+    } catch (err) {
+        return { platform: 'spotify', status: 'error', message: mirrorErrorMessage(err) };
+    }
+}
+
+export async function routeToPlatform(parsed, integrations, { guildId } = {}) {
     if (parsed.platform === 'spotify') {
         const spotify = integrations.spotify;
         if (!spotify) {
@@ -705,7 +1017,17 @@ export async function routeToPlatform(parsed, integrations) {
                 userMessage: 'Spotify integration is not configured. Ask an admin to finish setup.'
             });
         }
-        return await spotify.addTrack(parsed.id);
+        const primary = await spotify.addTrack(parsed.id, guildId);
+        const mirrors = [];
+        if (integrations.youtube) {
+            const mirror = await mirrorSpotifyTrackToYouTube({
+                primary,
+                youtube: integrations.youtube,
+                guildId
+            });
+            if (mirror) mirrors.push(mirror);
+        }
+        return { primary, mirrors };
     }
     if (parsed.platform === 'youtube') {
         const youtube = integrations.youtube;
@@ -716,7 +1038,17 @@ export async function routeToPlatform(parsed, integrations) {
                 userMessage: 'YouTube integration is not configured. Ask an admin to finish setup.'
             });
         }
-        return await youtube.addVideo(parsed.id);
+        const primary = await youtube.addVideo(parsed.id, guildId);
+        const mirrors = [];
+        if (integrations.spotify) {
+            const mirror = await mirrorYouTubeVideoToSpotify({
+                primary,
+                spotify: integrations.spotify,
+                guildId
+            });
+            if (mirror) mirrors.push(mirror);
+        }
+        return { primary, mirrors };
     }
     throw new PlaylistError('Unsupported platform.', {
         code: 'unsupported',
@@ -743,22 +1075,51 @@ function resolveAvatarUrl(interaction) {
     return null;
 }
 
-function createSuccessMessage({ platform, title, playlistUrl, mirrored, skipped }) {
+function describeMirrorOutcome(entry) {
+    const label = entry.platform === 'spotify' ? 'Spotify' : 'YouTube';
+    switch (entry.status) {
+        case 'added':
+            return `Mirrored on the ${label} playlist: ${entry.title ?? 'Matched entry'}`;
+        case 'skipped':
+            return `Already on the ${label} playlist: ${entry.title ?? 'Matched entry'}`;
+        case 'notFound':
+            return label === 'Spotify'
+                ? 'Could not find a matching Spotify track to mirror.'
+                : 'Could not find a matching YouTube video to mirror.';
+        case 'metadataMissing':
+            return `Could not determine song metadata to mirror onto ${label}.`;
+        case 'error':
+            return `Mirror to ${label} failed: ${entry.message ?? 'Unknown error.'}`;
+        default:
+            return null;
+    }
+}
+
+function createSuccessMessage({ primary, mirrors = [], mirrored }) {
     const lines = [];
-    const label = platform === 'spotify' ? 'Spotify' : 'YouTube';
-    if (skipped) {
-        lines.push(`Already on the ${label} playlist: ${title}`);
+    const label = primary.platform === 'spotify' ? 'Spotify' : 'YouTube';
+    if (primary.skipped) {
+        lines.push(`Already on the ${label} playlist: ${primary.title}`);
     } else {
-        lines.push(`Added to the ${label} playlist: ${title}`);
+        lines.push(`Added to the ${label} playlist: ${primary.title}`);
     }
-    if (playlistUrl) {
-        lines.push(`Playlist: ${playlistUrl}`);
+    if (primary.playlistUrl) {
+        lines.push(`Playlist: ${primary.playlistUrl}`);
     }
-    if (!skipped && !mirrored) {
+    if (!primary.skipped && !mirrored) {
         lines.push('Note: I need Manage Webhooks in this channel to mirror your name/avatar, so I posted as the bot instead.');
     }
-    if (skipped) {
+    if (primary.skipped) {
         lines.push('The link was not re-posted because the track already exists in the playlist.');
+    }
+    for (const mirror of mirrors) {
+        const summary = describeMirrorOutcome(mirror);
+        if (summary) {
+            lines.push(summary);
+            if (mirror.playlistUrl && ['added', 'skipped'].includes(mirror.status)) {
+                lines.push(`Playlist: ${mirror.playlistUrl}`);
+            }
+        }
     }
     return lines.join('\n');
 }
@@ -773,9 +1134,7 @@ function createErrorMessage(err) {
 function logAudit(logger, interaction, result) {
     if (!logger) return;
     const platformId = result.platform === 'spotify' ? result.trackId : result.videoId ?? null;
-    const playlistId = result.platform === 'spotify'
-        ? runtime.spotify?.playlistId
-        : runtime.youtube?.playlistId;
+    const playlistId = result.playlistId ?? null;
     const payload = {
         guild: interaction.guildId ?? null,
         channel: interaction.channelId ?? null,
@@ -883,9 +1242,9 @@ export async function init(ctx) {
             await interaction.deferReply({ ephemeral: true });
         }
 
-        let result;
+        let outcome;
         try {
-            result = await routeToPlatform(parsed, integrations);
+            outcome = await routeToPlatform(parsed, integrations, { guildId: interaction.guildId ?? null });
         } catch (err) {
             await replySafely(interaction, {
                 content: createErrorMessage(err),
@@ -894,9 +1253,19 @@ export async function init(ctx) {
             return;
         }
 
-        let mirrored = false;
+        const primary = outcome?.primary ?? null;
+        const mirrors = Array.isArray(outcome?.mirrors) ? outcome.mirrors : [];
+        if (!primary) {
+            await replySafely(interaction, {
+                content: 'Something went wrong while processing that link. Please try again in a moment.',
+                ephemeral: true
+            });
+            return;
+        }
+
+        let mirroredLink = false;
         let postNotice = null;
-        if (!result.skipped) {
+        if (!primary.skipped) {
             try {
                 const identity = {
                     username: resolveDisplayName(interaction),
@@ -908,10 +1277,10 @@ export async function init(ctx) {
                     username: identity.username,
                     avatarURL: identity.avatarURL
                 });
-                mirrored = sendResult?.mirrored ?? false;
+                mirroredLink = sendResult?.mirrored ?? false;
             } catch (err) {
                 runtime.logger?.warn?.(`[playlists] Failed to deliver mirrored message: ${err?.message ?? err}`);
-                mirrored = false;
+                mirroredLink = false;
                 postNotice = err instanceof PlaylistError
                     ? err.userMessage
                     : 'I added the item, but I could not post the link in this channel.';
@@ -919,11 +1288,9 @@ export async function init(ctx) {
         }
 
         let content = createSuccessMessage({
-            platform: result.platform,
-            title: result.title,
-            playlistUrl: result.playlistUrl,
-            mirrored,
-            skipped: result.skipped
+            primary,
+            mirrors,
+            mirrored: mirroredLink
         });
 
         if (postNotice) {
@@ -932,8 +1299,8 @@ export async function init(ctx) {
 
         await replySafely(interaction, { content, ephemeral: true });
 
-        if (!result.skipped) {
-            logAudit(runtime.logger, interaction, result);
+        if (!primary.skipped) {
+            logAudit(runtime.logger, interaction, primary);
         }
     });
 }

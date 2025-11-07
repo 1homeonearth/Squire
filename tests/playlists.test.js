@@ -127,38 +127,118 @@ describe('WebhookRelayManager', () => {
 
 describe('routeToPlatform', () => {
     it('routes Spotify requests to the Spotify client', async () => {
-        const spotify = { addTrack: vi.fn(async (id) => ({
+        const spotify = { addTrack: vi.fn(async (id, guildId) => ({
             platform: 'spotify',
             title: 'Song',
             playlistUrl: 'https://spotify',
             snapshotId: 'snap',
             trackId: id,
             trackUri: `spotify:track:${id}`,
-            skipped: false
+            skipped: false,
+            playlistId: 'playlist123',
+            guildId,
+            songMetadata: { title: 'Song', artist: 'Artist', artists: ['Artist'] }
         })) };
-        const result = await routeToPlatform({ platform: 'spotify', id: 'track123' }, { spotify, youtube: null });
-        expect(spotify.addTrack).toHaveBeenCalledWith('track123');
-        expect(result.platform).toBe('spotify');
-        expect(result.trackId).toBe('track123');
+        const result = await routeToPlatform({ platform: 'spotify', id: 'track123' }, { spotify, youtube: null }, { guildId: 'guild123' });
+        expect(spotify.addTrack).toHaveBeenCalledWith('track123', 'guild123');
+        expect(result.primary.platform).toBe('spotify');
+        expect(result.primary.trackId).toBe('track123');
+        expect(result.mirrors).toEqual([]);
     });
 
     it('routes YouTube requests to the YouTube client', async () => {
-        const youtube = { addVideo: vi.fn(async (id) => ({
+        const youtube = { addVideo: vi.fn(async (id, guildId) => ({
             platform: 'youtube',
             title: 'Video',
             playlistUrl: 'https://youtube',
             playlistItemId: 'item',
             videoId: id,
-            skipped: false
+            skipped: false,
+            playlistId: 'yt123',
+            guildId,
+            songMetadata: { title: 'Video', artist: 'Artist' }
         })) };
-        const result = await routeToPlatform({ platform: 'youtube', id: 'video123' }, { spotify: null, youtube });
-        expect(youtube.addVideo).toHaveBeenCalledWith('video123');
-        expect(result.platform).toBe('youtube');
-        expect(result.videoId).toBe('video123');
+        const result = await routeToPlatform({ platform: 'youtube', id: 'video123' }, { spotify: null, youtube }, { guildId: 'guild123' });
+        expect(youtube.addVideo).toHaveBeenCalledWith('video123', 'guild123');
+        expect(result.primary.platform).toBe('youtube');
+        expect(result.primary.videoId).toBe('video123');
+        expect(result.mirrors).toEqual([]);
     });
 
     it('throws when integration is missing', async () => {
-        await expect(routeToPlatform({ platform: 'spotify', id: 'x' }, { spotify: null, youtube: null }))
+        await expect(routeToPlatform({ platform: 'spotify', id: 'x' }, { spotify: null, youtube: null }, { guildId: 'guild123' }))
             .rejects.toThrowError(/Spotify integration is not configured/);
+    });
+
+    it('mirrors Spotify tracks to YouTube when a match is found', async () => {
+        const primaryResult = {
+            platform: 'spotify',
+            title: 'Song — Artist',
+            playlistUrl: 'https://spotify',
+            snapshotId: 'snap',
+            trackId: 'track123',
+            trackUri: 'spotify:track:track123',
+            skipped: false,
+            playlistId: 'playlist123',
+            songMetadata: { title: 'Song', artist: 'Artist', artists: ['Artist'] }
+        };
+        const spotify = {
+            addTrack: vi.fn(async () => primaryResult)
+        };
+        const youtube = {
+            findMatchingVideo: vi.fn(async () => ({ videoId: 'video321', snippet: {} })),
+            addVideo: vi.fn(async () => ({
+                platform: 'youtube',
+                title: 'Artist - Song',
+                playlistUrl: 'https://youtube',
+                playlistItemId: 'item',
+                videoId: 'video321',
+                skipped: false,
+                playlistId: 'yt123'
+            }))
+        };
+
+        const result = await routeToPlatform({ platform: 'spotify', id: 'track123' }, { spotify, youtube }, { guildId: 'guild123' });
+        expect(youtube.findMatchingVideo).toHaveBeenCalledWith({ title: 'Song', artist: 'Artist' });
+        expect(youtube.addVideo).toHaveBeenCalledWith('video321', 'guild123');
+        expect(result.mirrors).toEqual([
+            {
+                platform: 'youtube',
+                status: 'added',
+                title: 'Artist - Song',
+                playlistUrl: 'https://youtube',
+                videoId: 'video321'
+            }
+        ]);
+    });
+
+    it('reports when no Spotify track can be mirrored for a YouTube link', async () => {
+        const primaryResult = {
+            platform: 'youtube',
+            title: 'Artist - Song',
+            playlistUrl: 'https://youtube',
+            playlistItemId: 'item',
+            videoId: 'video321',
+            skipped: false,
+            playlistId: 'yt123',
+            songMetadata: { title: 'Song', artist: 'Artist' }
+        };
+        const youtube = {
+            addVideo: vi.fn(async () => primaryResult)
+        };
+        const spotify = {
+            findMatchingTrack: vi.fn(async () => null),
+            addTrack: vi.fn()
+        };
+
+        const result = await routeToPlatform({ platform: 'youtube', id: 'video321' }, { spotify, youtube }, { guildId: 'guild123' });
+        expect(spotify.findMatchingTrack).toHaveBeenCalledWith({ title: 'Song', artist: 'Artist' });
+        expect(spotify.addTrack).not.toHaveBeenCalled();
+        expect(result.mirrors).toEqual([
+            {
+                platform: 'spotify',
+                status: 'notFound'
+            }
+        ]);
     });
 });
