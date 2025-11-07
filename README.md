@@ -123,6 +123,7 @@ Each `/setup` view ships with focused controls tailored to its feature module. U
 2. Hit **Configure Spotify credentials** or **Configure YouTube credentials** to enter client IDs/secrets, refresh tokens, and fallback playlist IDs in modal fields.
 3. Toggle **Skip duplicates: On/Off** to determine whether Spotify skips tracks already present before posting.
 4. Pick a main server from the dropdown to edit per-guild playlist IDs, then click **Set Spotify playlist** or **Set YouTube playlist** to save the IDs for that server.
+   - You can paste either the raw playlist ID or a full playlist URL — Squire normalises URLs to IDs automatically when saving.
 5. Once both platforms are configured, `/add` mirrors submissions to both playlists whenever an exact artist/title match is found (reporting when matches cannot be located).
 
 ## Repository layout
@@ -349,11 +350,13 @@ The playlist relay keeps Spotify and YouTube credentials alongside per-guild pla
 - `spotify`
   - `clientId`, `clientSecret`, `refreshToken`: OAuth credentials (sourced from the environment).
   - `playlistId`: optional fallback playlist used when a guild override is missing.
+    - Accepts either a raw playlist ID or a full Spotify playlist URL; URLs are normalised to IDs automatically.
   - `skipDupes`: string/boolean flag honoured by `/setup` and the runtime when checking for duplicates.
   - `guilds`: map of guild IDs to `{ playlistId, name? }` entries. Blank IDs are valid placeholders until configured via `/setup`.
 - `youtube`
   - `clientId`, `clientSecret`, `refreshToken`: OAuth credentials.
   - `playlistId`: optional fallback playlist ID.
+    - Accepts either a raw playlist ID or a full YouTube playlist URL; URLs are normalised to IDs automatically.
   - `guilds`: map of guild IDs to `{ playlistId, name? }` entries.
 
 ### Using the `/setup` module

@@ -88,6 +88,51 @@ describe('normalizePlaylistsConfig', () => {
         expect(normalized.spotify).toBeNull();
         expect(normalized.youtube).toBeNull();
     });
+
+    it('normalizes playlist URLs down to playlist IDs', () => {
+        const normalized = normalizePlaylistsConfig({
+            spotify: {
+                clientId: 'cid',
+                clientSecret: 'secret',
+                refreshToken: 'refresh',
+                playlistId: 'https://open.spotify.com/playlist/ABC123?si=test',
+                guilds: {
+                    '123': {
+                        playlistId: 'https://open.spotify.com/playlist/DEF456?utm_source=widget',
+                        name: 'Main'
+                    }
+                }
+            },
+            youtube: {
+                clientId: 'ycid',
+                clientSecret: 'ysecret',
+                refreshToken: 'yrefresh',
+                playlistId: 'https://www.youtube.com/playlist?list=PL1234567890',
+                guilds: {
+                    '123': {
+                        playlistId: 'https://youtu.be/abcdef?list=PL0987654321',
+                        name: 'Main'
+                    }
+                }
+            }
+        });
+
+        expect(normalized.spotify?.fallback?.playlistId).toBe('ABC123');
+        expect(normalized.spotify?.fallback?.playlistUrl).toBe('https://open.spotify.com/playlist/ABC123');
+        expect(normalized.spotify?.guilds['123']).toMatchObject({
+            playlistId: 'DEF456',
+            playlistUrl: 'https://open.spotify.com/playlist/DEF456',
+            name: 'Main'
+        });
+
+        expect(normalized.youtube?.fallback?.playlistId).toBe('PL1234567890');
+        expect(normalized.youtube?.fallback?.playlistUrl).toBe('https://www.youtube.com/playlist?list=PL1234567890');
+        expect(normalized.youtube?.guilds['123']).toMatchObject({
+            playlistId: 'PL0987654321',
+            playlistUrl: 'https://www.youtube.com/playlist?list=PL0987654321',
+            name: 'Main'
+        });
+    });
 });
 
 describe('WebhookRelayManager', () => {
