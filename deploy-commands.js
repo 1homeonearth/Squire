@@ -49,6 +49,85 @@ const commands = [
         ]
     },
     {
+        name: 'unban',
+        description: 'Remove a ban across all managed servers',
+        default_member_permissions: String(PermissionFlagsBits.BanMembers),
+        dm_permission: false,
+        options: [
+            {
+                type: 3,
+                name: 'user',
+                description: 'User ID to unban across every managed server',
+                required: true,
+                min_length: 15,
+                max_length: 25
+            },
+            {
+                type: 3,
+                name: 'reason',
+                description: 'Reason to record in audit logs',
+                required: false,
+                max_length: 512
+            }
+        ]
+    },
+    {
+        name: 'kick',
+        description: 'Kick a member from this server',
+        default_member_permissions: String(PermissionFlagsBits.KickMembers),
+        dm_permission: false,
+        options: [
+            {
+                type: 6,
+                name: 'user',
+                description: 'Member to kick',
+                required: true
+            },
+            {
+                type: 3,
+                name: 'reason',
+                description: 'Reason to record in audit logs',
+                required: false,
+                max_length: 512
+            }
+        ]
+    },
+    {
+        name: 'timeout',
+        description: 'Apply a communication timeout to a member',
+        default_member_permissions: String(PermissionFlagsBits.ModerateMembers),
+        dm_permission: false,
+        options: [
+            {
+                type: 6,
+                name: 'user',
+                description: 'Member to timeout',
+                required: true
+            },
+            {
+                type: 4,
+                name: 'duration',
+                description: 'How long should the timeout last?',
+                required: true,
+                choices: [
+                    { name: '10 minutes', value: 600 },
+                    { name: '1 hour', value: 3600 },
+                    { name: '12 hours', value: 43200 },
+                    { name: '1 day', value: 86400 },
+                    { name: '3 days', value: 259200 },
+                    { name: '1 week', value: 604800 }
+                ]
+            },
+            {
+                type: 3,
+                name: 'reason',
+                description: 'Reason to record in audit logs',
+                required: false,
+                max_length: 512
+            }
+        ]
+    },
+    {
         name: 'add',
         description: 'Add a Spotify track or YouTube video to the shared playlist',
         dm_permission: false,

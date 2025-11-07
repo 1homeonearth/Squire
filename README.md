@@ -35,9 +35,10 @@ cd Squire-main
   - Instantly bans unverified accounts whose username, display name, or global name contains known spam terms (mega/megas/link/links by default).
   - Optional notification channel/webhooks + verified-role exemptions so trusted members or staff can bypass the filter.
   - Persists every decision (success, permission failure, unexpected error) to the LokiJS database for auditability.
-- **Global ban command** (`src/features/global-ban/`)
-  - Adds the `/ban` slash command that accepts a user and optional reason, then propagates the ban across every managed server (main servers, the logging hub, and any other guild Squire is present in).
-  - Requires the **Ban Members** permission, safeguards against missing permissions per guild, and reports which servers succeeded, already had the ban, or failed.
+- **Moderation commands** (`src/features/moderation-commands/`)
+  - Ships `/ban`, `/unban`, `/kick`, and `/timeout` slash commands so staff can moderate without leaving Discord.
+  - `/ban` and `/unban` continue to propagate across every managed server, while `/kick` and `/timeout` act on the invoking guild with detailed success/failure reporting.
+  - Access is restricted to moderator roles selected in `/setup` (with **Manage Server**/**Administrator** as a fallback) so only approved staff can execute the commands.
 - **Rainbow Bridge** (`src/features/rainbow-bridge/`)
   - Mirrors messages, edits, and deletions across linked channels spanning multiple guilds.
   - Supports per-bridge overrides for bot forwarding, friendly bridge names, and automatic embed cleanup for rich media.
@@ -50,6 +51,7 @@ cd Squire-main
 - **Playlist relay** (`src/features/playlists/`)
   - Adds the `/add` command for piping Spotify tracks or YouTube videos into shared playlists using OAuth credentials.
   - Mirrors the cleaned link back into the invoking channel via managed webhooks while preserving Discord's native YouTube player.
+  - Configure Spotify/YouTube client credentials and the duplicate-skipping toggle directly from the `/setup` panel instead of editing JSON by hand.
 - **Setup panel** (`src/features/setup/`)
   - Provides the `/setup` slash command that gives admins an in-Discord control panel for every module.
   - Manages logging destinations, welcome channel reminders, rainbow bridge links, autobouncer keywords, experience rules, and embed builder presets without editing `config.json` manually.

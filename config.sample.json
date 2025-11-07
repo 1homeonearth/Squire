@@ -10,7 +10,7 @@
   "featureOrder": [
     "setup",
     "auto-bouncer",
-    "global-ban",
+    "moderation-commands",
     "logging-forwarder",
     "rainbow-bridge",
     "welcome-cards",
@@ -55,6 +55,9 @@
       "refreshToken": "$ENV{YT_REFRESH_TOKEN}",
       "playlistId": "$ENV{YT_PLAYLIST_ID}"
     }
+  },
+  "moderationCommands": {
+    "roleMap": "$ENV{MODERATION_ROLE_MAP_JSON}"
   }
 }
 
