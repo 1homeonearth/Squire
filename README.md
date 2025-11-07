@@ -147,9 +147,9 @@ squire.db.json          # LokiJS JSON dump (created on first run if not present)
 2. **Install dependencies** — `npm install`.
 3. **Run linting & tests** — `npm run lint` and `npm test` before pushing changes.
 4. **Type check (optional)** — `npm run build` invokes `tsc -p .` to surface declaration issues.
-5. **Deploy slash commands** — `node deploy-commands.js` now publishes `/setup` (and any future commands) globally by default so
-   production hosts stay in sync even when `devGuildId` exists in `config.json`. Pass `--dev` (or export `SQUIRE_DEPLOY_DEV=1`)
-   to target the configured development guild for faster iteration.
+5. **Deploy slash commands** — `scripts/commands-sync.sh` now wraps the deployment helpers in `src/core/`. Export `WIPE_GLOBAL`,
+   `SET_GLOBAL`, or `INCLUDE_DEV_COMMANDS` before running it to choose whether to wipe global commands, redeploy the production
+   set from `deploy-commands.js`, and/or push feature modules to the logging guild via `src/core/commands-deploy.js`.
 
 For production hosts, the `squirectl` helper wraps deployment tasks (fetching from `origin/main`, running `npm ci`, rendering config from environment, and managing the systemd unit).
 
