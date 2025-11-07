@@ -1,9 +1,33 @@
-import { describe, expect, it } from 'vitest';
+import fs from 'fs';
+import path from 'path';
+import { fileURLToPath } from 'url';
+import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 
 import {
     collectTargetGuildIds,
     formatBanResults
 } from '../src/features/moderation-commands/index.js';
+import { loadConfig } from '../src/core/config.js';
+
+const __dir = path.dirname(fileURLToPath(import.meta.url));
+const CONFIG_PATH = path.resolve(__dir, '../config.json');
+let hadOriginalConfig = false;
+let originalConfigContents = '';
+
+beforeEach(() => {
+    hadOriginalConfig = fs.existsSync(CONFIG_PATH);
+    originalConfigContents = hadOriginalConfig ? fs.readFileSync(CONFIG_PATH, 'utf8') : '';
+});
+
+afterEach(() => {
+    delete process.env.MODERATION_ROLE_MAP_JSON;
+    if (fs.existsSync(CONFIG_PATH)) {
+        fs.unlinkSync(CONFIG_PATH);
+    }
+    if (hadOriginalConfig) {
+        fs.writeFileSync(CONFIG_PATH, originalConfigContents);
+    }
+});
 
 describe('moderation command helpers', () => {
     it('collectTargetGuildIds deduplicates and aggregates from config and cache', () => {
@@ -65,6 +89,42 @@ describe('moderation command helpers', () => {
     it('formatBanResults handles empty results gracefully', () => {
         const message = formatBanResults('Target', [], {});
         expect(message).toContain('No target servers were found');
+    });
+
+    it('loadConfig uses MODERATION_ROLE_MAP_JSON override for the role map', () => {
+        fs.writeFileSync(CONFIG_PATH, JSON.stringify({
+            moderationCommands: {
+                roleMap: {
+                    '111': ['staff-old']
+                }
+            }
+        }));
+        process.env.MODERATION_ROLE_MAP_JSON = JSON.stringify({
+            '222': ['staff-new']
+        });
+
+        const config = loadConfig();
+
+        expect(config.moderationCommands).toBeDefined();
+        expect(config.moderationCommands.roleMap).toEqual({
+            '222': ['staff-new']
+        });
+    });
+
+    it('loadConfig coerces string role maps from disk into objects', () => {
+        fs.writeFileSync(CONFIG_PATH, JSON.stringify({
+            moderationCommands: {
+                roleMap: JSON.stringify({
+                    '333': ['role-one']
+                })
+            }
+        }));
+
+        const config = loadConfig();
+
+        expect(config.moderationCommands.roleMap).toEqual({
+            '333': ['role-one']
+        });
     });
 });
 
