@@ -13,6 +13,7 @@ import {
 } from 'discord.js';
 
 import { appendHomeButtonRow, sanitizeSnowflakeId } from '../setup/shared.js';
+import { extractSpotifyPlaylistId, extractYouTubePlaylistId } from './index.js';
 
 function sanitizeString(value) {
     if (value === undefined || value === null) return '';
@@ -31,7 +32,7 @@ function toBoolean(value, fallback = false) {
     return fallback;
 }
 
-function normalizeGuildPlaylistMap(source) {
+function normalizeGuildPlaylistMap(source, platform) {
     const output = {};
     if (!source || typeof source !== 'object') {
         return output;
@@ -39,16 +40,17 @@ function normalizeGuildPlaylistMap(source) {
     for (const [guildId, entry] of Object.entries(source)) {
         const sanitizedId = sanitizeSnowflakeId(guildId);
         if (!sanitizedId) continue;
+        const extractId = platform === 'spotify' ? extractSpotifyPlaylistId : extractYouTubePlaylistId;
         if (typeof entry === 'string') {
             output[sanitizedId] = {
-                playlistId: sanitizeString(entry),
+                playlistId: extractId(sanitizeString(entry)),
                 name: ''
             };
             continue;
         }
         if (entry && typeof entry === 'object') {
             output[sanitizedId] = {
-                playlistId: sanitizeString(entry.playlistId),
+                playlistId: extractId(sanitizeString(entry.playlistId)),
                 name: sanitizeString(entry.name)
             };
         }
@@ -93,12 +95,12 @@ export function createPlaylistsSetup({ panelStore, saveConfig }) {
             : [];
 
         const spotifyGuilds = ensureGuildCoverage(
-            normalizeGuildPlaylistMap(rawSpotify.guilds ?? rawSpotify.perGuild ?? {}),
+            normalizeGuildPlaylistMap(rawSpotify.guilds ?? rawSpotify.perGuild ?? {}, 'spotify'),
             mainGuilds
         );
 
         const youtubeGuilds = ensureGuildCoverage(
-            normalizeGuildPlaylistMap(rawYouTube.guilds ?? {}),
+            normalizeGuildPlaylistMap(rawYouTube.guilds ?? {}, 'youtube'),
             mainGuilds
         );
 
@@ -106,7 +108,7 @@ export function createPlaylistsSetup({ panelStore, saveConfig }) {
             clientId: sanitizeString(rawSpotify.clientId),
             clientSecret: sanitizeString(rawSpotify.clientSecret),
             refreshToken: sanitizeString(rawSpotify.refreshToken),
-            playlistId: sanitizeString(rawSpotify.playlistId),
+            playlistId: extractSpotifyPlaylistId(sanitizeString(rawSpotify.playlistId)),
             skipDupes: toBoolean(rawSpotify.skipDupes, false),
             guilds: spotifyGuilds
         };
@@ -115,7 +117,7 @@ export function createPlaylistsSetup({ panelStore, saveConfig }) {
             clientId: sanitizeString(rawYouTube.clientId),
             clientSecret: sanitizeString(rawYouTube.clientSecret),
             refreshToken: sanitizeString(rawYouTube.refreshToken),
-            playlistId: sanitizeString(rawYouTube.playlistId),
+            playlistId: extractYouTubePlaylistId(sanitizeString(rawYouTube.playlistId)),
             guilds: youtubeGuilds
         };
     }
@@ -497,7 +499,9 @@ export function createPlaylistsSetup({ panelStore, saveConfig }) {
                 spotify.clientId = sanitizeString(interaction.fields.getTextInputValue('setup:playlists:spotify:clientId'));
                 spotify.clientSecret = sanitizeString(interaction.fields.getTextInputValue('setup:playlists:spotify:clientSecret'));
                 spotify.refreshToken = sanitizeString(interaction.fields.getTextInputValue('setup:playlists:spotify:refreshToken'));
-                spotify.playlistId = sanitizeString(interaction.fields.getTextInputValue('setup:playlists:spotify:playlistId'));
+                spotify.playlistId = extractSpotifyPlaylistId(
+                    sanitizeString(interaction.fields.getTextInputValue('setup:playlists:spotify:playlistId'))
+                );
                 spotify.skipDupes = toBoolean(spotify.skipDupes, false);
                 config.playlists.spotify = spotify;
                 saveConfig(config, logger);
@@ -509,7 +513,9 @@ export function createPlaylistsSetup({ panelStore, saveConfig }) {
                 youtube.clientId = sanitizeString(interaction.fields.getTextInputValue('setup:playlists:youtube:clientId'));
                 youtube.clientSecret = sanitizeString(interaction.fields.getTextInputValue('setup:playlists:youtube:clientSecret'));
                 youtube.refreshToken = sanitizeString(interaction.fields.getTextInputValue('setup:playlists:youtube:refreshToken'));
-                youtube.playlistId = sanitizeString(interaction.fields.getTextInputValue('setup:playlists:youtube:playlistId'));
+                youtube.playlistId = extractYouTubePlaylistId(
+                    sanitizeString(interaction.fields.getTextInputValue('setup:playlists:youtube:playlistId'))
+                );
                 config.playlists.youtube = youtube;
                 saveConfig(config, logger);
                 await handleModalSubmit({ interaction, config, key, logger, selectedGuildId: resolvedGuildId });
@@ -527,7 +533,9 @@ export function createPlaylistsSetup({ panelStore, saveConfig }) {
                 if (!config.playlists.spotify.guilds || typeof config.playlists.spotify.guilds !== 'object') {
                     config.playlists.spotify.guilds = {};
                 }
-                const playlistId = sanitizeString(interaction.fields.getTextInputValue('setup:playlists:spotifyGuild:playlistId'));
+                const playlistId = extractSpotifyPlaylistId(
+                    sanitizeString(interaction.fields.getTextInputValue('setup:playlists:spotifyGuild:playlistId'))
+                );
                 const entry = config.playlists.spotify.guilds[guildId] ?? { playlistId: '', name: '' };
                 entry.playlistId = playlistId;
                 config.playlists.spotify.guilds[guildId] = entry;
@@ -554,7 +562,9 @@ export function createPlaylistsSetup({ panelStore, saveConfig }) {
                 if (!config.playlists.youtube.guilds || typeof config.playlists.youtube.guilds !== 'object') {
                     config.playlists.youtube.guilds = {};
                 }
-                const playlistId = sanitizeString(interaction.fields.getTextInputValue('setup:playlists:youtubeGuild:playlistId'));
+                const playlistId = extractYouTubePlaylistId(
+                    sanitizeString(interaction.fields.getTextInputValue('setup:playlists:youtubeGuild:playlistId'))
+                );
                 const entry = config.playlists.youtube.guilds[guildId] ?? { playlistId: '', name: '' };
                 entry.playlistId = playlistId;
                 config.playlists.youtube.guilds[guildId] = entry;

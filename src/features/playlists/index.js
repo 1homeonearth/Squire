@@ -13,6 +13,8 @@ const WEBHOOK_REASON = 'Squire playlist mirroring';
 
 const SPOTIFY_REGEX = /^(?:(?:https?:\/\/)?open\.spotify\.com\/track\/([A-Za-z0-9]+)(?:\?.*)?|spotify:track:([A-Za-z0-9]+))$/i;
 const YOUTUBE_REGEX = /^(?:https?:\/\/)?(?:www\.)?(?:youtube\.com\/watch\?v=([A-Za-z0-9_-]{11})|youtu\.be\/([A-Za-z0-9_-]{11})|youtube\.com\/shorts\/([A-Za-z0-9_-]{11}))(?:[&?].*)?$/i;
+const SPOTIFY_PLAYLIST_REGEX = /^(?:(?:https?:\/\/)?open\.spotify\.com\/playlist\/([A-Za-z0-9]+)(?:\?.*)?|spotify:playlist:([A-Za-z0-9]+))$/i;
+const YOUTUBE_PLAYLIST_LIST_PARAM = /[?&]list=([A-Za-z0-9_-]{10,})/i;
 
 const MAX_RETRIES = 5;
 const BASE_BACKOFF_MS = 500;
@@ -112,6 +114,32 @@ export function parsePlaylistLink(raw) {
     });
 }
 
+export function extractSpotifyPlaylistId(raw) {
+    const value = typeof raw === 'string' ? raw.trim() : '';
+    if (!value) return '';
+    const match = value.match(SPOTIFY_PLAYLIST_REGEX);
+    if (match) {
+        return match[1] || match[2] || '';
+    }
+    if (!value.includes('://') && /^[A-Za-z0-9]{16,}$/i.test(value)) {
+        return value;
+    }
+    return value.includes('://') ? '' : value;
+}
+
+export function extractYouTubePlaylistId(raw) {
+    const value = typeof raw === 'string' ? raw.trim() : '';
+    if (!value) return '';
+    const listMatch = value.match(YOUTUBE_PLAYLIST_LIST_PARAM);
+    if (listMatch) {
+        return listMatch[1] || '';
+    }
+    if (!value.includes('://') && /^[A-Za-z0-9_-]{10,}$/i.test(value)) {
+        return value;
+    }
+    return value.includes('://') ? '' : value;
+}
+
 function playlistUrlForPlatform(platform, playlistId) {
     if (!playlistId) return null;
     if (platform === 'spotify') return normalizeUrl(`https://open.spotify.com/playlist/${playlistId}`);
@@ -199,14 +227,18 @@ function normalizeGuildPlaylists(source, platform) {
     for (const [guildId, raw] of Object.entries(source)) {
         const id = pickString(guildId);
         if (!id) continue;
-        let playlistId = null;
-        let name = null;
+        let playlistInput = null;
+        let name = '';
         if (typeof raw === 'string') {
-            playlistId = pickString(raw);
+            playlistInput = raw;
         } else if (raw && typeof raw === 'object') {
-            playlistId = pickString(raw.playlistId);
-            name = pickString(raw.name);
+            playlistInput = raw.playlistId;
+            name = pickString(raw.name) ?? '';
         }
+        const trimmed = pickString(playlistInput);
+        const playlistId = platform === 'spotify'
+            ? extractSpotifyPlaylistId(trimmed)
+            : extractYouTubePlaylistId(trimmed);
         map[id] = {
             playlistId,
             playlistUrl: playlistId ? playlistUrlForPlatform(platform, playlistId) : null,
@@ -225,8 +257,10 @@ export function normalizePlaylistsConfig(source = {}) {
     const spotifyGuilds = normalizeGuildPlaylists(spotifyRaw.guilds ?? {}, 'spotify');
     const youtubeGuilds = normalizeGuildPlaylists(youtubeRaw.guilds ?? {}, 'youtube');
 
-    const spotifyFallbackId = pickString(spotifyRaw.playlistId, process.env.SPOTIFY_PLAYLIST_ID);
-    const youtubeFallbackId = pickString(youtubeRaw.playlistId, process.env.YT_PLAYLIST_ID);
+    const spotifyFallbackSource = pickString(spotifyRaw.playlistId, process.env.SPOTIFY_PLAYLIST_ID);
+    const youtubeFallbackSource = pickString(youtubeRaw.playlistId, process.env.YT_PLAYLIST_ID);
+    const spotifyFallbackId = extractSpotifyPlaylistId(spotifyFallbackSource);
+    const youtubeFallbackId = extractYouTubePlaylistId(youtubeFallbackSource);
 
     const spotify = (() => {
         const clientId = pickString(spotifyRaw.clientId, process.env.SPOTIFY_CLIENT_ID);
