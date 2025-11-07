@@ -59,6 +59,19 @@ export function loadConfig() {
         over.autoban = autobanBase;
     }
 
+    if (process.env.MODERATION_ROLE_MAP_JSON) {
+        const moderationBase = over.moderationCommands && typeof over.moderationCommands === 'object'
+            ? { ...over.moderationCommands }
+            : (fileCfg.moderationCommands && typeof fileCfg.moderationCommands === 'object'
+                ? { ...fileCfg.moderationCommands }
+                : {});
+        const fallbackRoleMap = typeof moderationBase.roleMap === 'string'
+            ? safeJSON(moderationBase.roleMap, {})
+            : moderationBase.roleMap;
+        moderationBase.roleMap = safeJSON(process.env.MODERATION_ROLE_MAP_JSON, fallbackRoleMap);
+        over.moderationCommands = moderationBase;
+    }
+
     if (typeof over.mapping === 'string') {
         over.mapping = safeJSON(over.mapping, {});
     }
@@ -69,6 +82,25 @@ export function loadConfig() {
 
     if (!over.autoban || typeof over.autoban !== 'object') {
         over.autoban = fileCfg.autoban && typeof fileCfg.autoban === 'object' ? { ...fileCfg.autoban } : {};
+    }
+
+    if (!over.moderationCommands || typeof over.moderationCommands !== 'object') {
+        over.moderationCommands = fileCfg.moderationCommands && typeof fileCfg.moderationCommands === 'object'
+            ? { ...fileCfg.moderationCommands }
+            : {};
+    }
+
+    if (typeof over.moderationCommands.roleMap === 'string') {
+        over.moderationCommands.roleMap = safeJSON(over.moderationCommands.roleMap, {});
+    }
+
+    if (!over.moderationCommands.roleMap || typeof over.moderationCommands.roleMap !== 'object') {
+        const fileRoleMap = fileCfg.moderationCommands && typeof fileCfg.moderationCommands === 'object'
+            ? fileCfg.moderationCommands.roleMap
+            : undefined;
+        over.moderationCommands.roleMap = fileRoleMap && typeof fileRoleMap === 'object'
+            ? { ...fileRoleMap }
+            : {};
     }
 
     if (typeof over.autoban.notifyChannelId === 'string' && !over.autoban.notifyChannelId) {

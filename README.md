@@ -706,6 +706,7 @@ Every change is persisted to `config.json`, so redeploys and restarts keep the c
 | `AUTOBAN_CONFIG_JSON` | JSON object overriding the entire `config.autoban` block. |
 | `AUTOBAN_NOTIFY_WEBHOOK` | Single webhook URL injected into the default `notifyWebhookUrls` list. |
 | `AUTOBAN_TEST_ROLE_MAP_JSON` | JSON map of guild IDs to role IDs for the autobouncer test harness. |
+| `MODERATION_ROLE_MAP_JSON` | JSON object overriding `config.moderationCommands.roleMap`. |
 | `EXPERIENCE_CONFIG_JSON` | JSON object replacing `config.experience` wholesale. |
 | `PLAYLISTS_SKIP_DUPES` | Truthy string/number enabling duplicate suppression for Spotify imports. |
 | `SPOTIFY_CLIENT_ID` | Spotify application client ID used when rendering `config.playlists.spotify`. |
