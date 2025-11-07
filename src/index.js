@@ -90,6 +90,22 @@ async function handleShutdown(signal) {
         logger.error(`[shutdown] Failed to destroy client cleanly: ${err?.message ?? err}`);
     }
 
+    if (typeof db?.saveDatabase === 'function') {
+        try {
+            await new Promise((resolve, reject) => {
+                db.saveDatabase((err) => {
+                    if (err) {
+                        reject(err);
+                    } else {
+                        resolve();
+                    }
+                });
+            });
+        } catch (err) {
+            logger.error(`[shutdown] Failed to persist database: ${err?.message ?? err}`);
+        }
+    }
+
     process.exit(0);
 }
 
