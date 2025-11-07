@@ -41,9 +41,18 @@ cd Squire-main
 - **Rainbow Bridge** (`src/features/rainbow-bridge/`)
   - Mirrors messages, edits, and deletions across linked channels spanning multiple guilds.
   - Supports per-bridge overrides for bot forwarding, friendly bridge names, and automatic embed cleanup for rich media.
+- **Experience system** (`src/features/experience/`)
+  - Awards XP for messages, reactions, and voice activity using per-guild rule sets with cooldowns, multipliers, and blacklists.
+  - Ships the `/xp set` moderator command for adjusting a member's total and persists totals in LokiJS collections.
+- **Embed builder** (`src/features/embed-builder/`)
+  - Lets staff compose reusable announcement embeds (preface text, color, title, description) and up to five HTTPS buttons directly from `/setup`.
+  - Stores the latest configuration in `config.embedBuilder` so announcements can be posted consistently across guilds.
+- **Playlist relay** (`src/features/playlists/`)
+  - Adds the `/add` command for piping Spotify tracks or YouTube videos into shared playlists using OAuth credentials.
+  - Mirrors the cleaned link back into the invoking channel via managed webhooks while preserving Discord's native YouTube player.
 - **Setup panel** (`src/features/setup/`)
   - Provides the `/setup` slash command that gives admins an in-Discord control panel for every module.
-  - Manages logging destinations, welcome channel reminders, rainbow bridge links, and autobouncer keywords without editing `config.json` manually.
+  - Manages logging destinations, welcome channel reminders, rainbow bridge links, autobouncer keywords, experience rules, and embed builder presets without editing `config.json` manually.
 
 ## Module setup integration
 
@@ -390,6 +399,9 @@ All configuration lives in `config.json`, which is materialised by `scripts/rend
 | `featureOrder` | Optional array of feature folder names to control load/listener registration order. |
 | `autoban` | Auto-bouncer config block (see below). |
 | `welcome` | Welcome card config block (see below). |
+| `experience` | Experience/XP rule definitions (normalised per guild). |
+| `embedBuilder` | Saved embed preset used by the setup panel. |
+| `playlists` | Spotify/YouTube playlist credentials for the `/add` command. |
 
 ### Rainbow Bridge config
 
@@ -467,6 +479,36 @@ For CI/CD you can provide a full JSON blob through `AUTOBAN_CONFIG_JSON` to over
   - `{{rules}}`, `{{roles}}`, `{{verify}}` — Mentions (or fallbacks) to the configured channels.
   - `{{membercount}}` — Current cached member count for the server.
 
+### Playlist relay config
+
+The playlist module reads OAuth credentials for Spotify and YouTube from `config.playlists`. Provide credentials for either (or both) platforms; missing blocks simply disable that provider while keeping `/add` available for the other one.
+
+```json
+"playlists": {
+  "spotify": {
+    "clientId": "${SPOTIFY_CLIENT_ID}",
+    "clientSecret": "${SPOTIFY_CLIENT_SECRET}",
+    "refreshToken": "${SPOTIFY_REFRESH_TOKEN}",
+    "playlistId": "${SPOTIFY_PLAYLIST_ID}",
+    "skipDupes": false
+  },
+  "youtube": {
+    "clientId": "${YT_CLIENT_ID}",
+    "clientSecret": "${YT_CLIENT_SECRET}",
+    "refreshToken": "${YT_REFRESH_TOKEN}",
+    "playlistId": "${YT_PLAYLIST_ID}"
+  }
+}
+```
+
+- Spotify credentials mirror the [Client Credentials + refresh token flow](https://developer.spotify.com/documentation/web-api/tutorials/refreshing-tokens). Set `skipDupes` to `true` (or `PLAYLISTS_SKIP_DUPES=1`) to avoid reposting tracks already in the playlist.
+- YouTube credentials use the Data API v3 OAuth flow. Refresh tokens can be created with `node scripts/youtube-refresh-token.mjs`.
+- The `/add` slash command validates each pasted link, adds it to the target playlist, and mirrors the cleaned URL back into the invoking channel using a managed `Squire Relay` webhook. Grant **Manage Webhooks** so Squire can create/update the relay.
+- Mirrored messages post only the raw URL with `allowedMentions: { parse: [] }` so Discord unfurls the native Spotify preview or YouTube player without custom embeds.
+- Failed API requests surface actionable error strings (quota exceeded, playlist not found, invalid link) inside the ephemeral reply, helping moderators correct issues quickly.
+
+Use `node scripts/spotify-refresh-token.mjs` or `node scripts/youtube-refresh-token.mjs` to exchange auth codes for long-lived refresh tokens when rotating secrets.
+
 ### In-Discord setup panel
 
 The `/setup` command opens an overview for operators with the **Manage Server** permission:
@@ -476,6 +518,8 @@ The `/setup` command opens an overview for operators with the **Manage Server** 
 - Welcome Cards — choose a target server, set its welcome channel, and pick (or clear) the rules/roles/verify references individually.
 - Rainbow Bridge — link channels across servers so messages, edits, and deletions stay in sync everywhere.
 - Autobouncer — toggle the module, edit the blocked keyword list, and choose the logging server channel that receives autobounce notifications.
+- Experience — curate rule sets per guild (message/voice/reaction gains, leaderboards, level-up channels) and preview XP settings before saving.
+- Embed Builder — design the saved embed, edit preface text, and manage up to five HTTPS buttons for quick announcements.
 
 Every change is persisted to `config.json`, so redeploys and restarts keep the configured state without manual file edits.
 
@@ -495,6 +539,18 @@ Every change is persisted to `config.json`, so redeploys and restarts keep the c
 | `WELCOME_CONFIG_JSON` | JSON object overriding `config.welcome`. |
 | `AUTOBAN_NOTIFY_CHANNEL_ID` | Channel ID string overriding `config.autoban.notifyChannelId`. |
 | `AUTOBAN_CONFIG_JSON` | JSON object overriding the entire `config.autoban` block. |
+| `AUTOBAN_NOTIFY_WEBHOOK` | Single webhook URL injected into the default `notifyWebhookUrls` list. |
+| `AUTOBAN_TEST_ROLE_MAP_JSON` | JSON map of guild IDs to role IDs for the autobouncer test harness. |
+| `EXPERIENCE_CONFIG_JSON` | JSON object replacing `config.experience` wholesale. |
+| `PLAYLISTS_SKIP_DUPES` | Truthy string/number enabling duplicate suppression for Spotify imports. |
+| `SPOTIFY_CLIENT_ID` | Spotify application client ID used when rendering `config.playlists.spotify`. |
+| `SPOTIFY_CLIENT_SECRET` | Spotify application client secret. |
+| `SPOTIFY_REFRESH_TOKEN` | Refresh token granting write access to the target Spotify playlist. |
+| `SPOTIFY_PLAYLIST_ID` | Playlist ID that receives new Spotify tracks. |
+| `YT_CLIENT_ID` | YouTube Data API OAuth client ID. |
+| `YT_CLIENT_SECRET` | YouTube Data API OAuth client secret. |
+| `YT_REFRESH_TOKEN` | Refresh token with access to the YouTube playlist. |
+| `YT_PLAYLIST_ID` | Playlist ID that receives new YouTube videos. |
 
 ## Managing slash commands
 
@@ -525,7 +581,7 @@ The Node.js test runner covers high-risk logic such as the auto-bouncer’s mode
 
 ## Development tips
 
-- Keep Node.js up to date (>= 18.17) so `discord.js` and `canvacord` native dependencies work correctly.
+- Keep Node.js up to date (>= 22.x) so `discord.js` and `canvacord` native dependencies work correctly.
 - Feature modules are standard ES modules that export an `init(ctx)` function. The loader passes `{ client, config, logger, db }`.
 - Avoid deprecated Discord API options such as `deleteMessageDays`; the code base already uses the modern replacements.
 - When adding new features, create a new folder under `src/features/` with an `index.js` export—no extra wiring needed.
