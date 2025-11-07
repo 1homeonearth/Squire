@@ -3,9 +3,9 @@ import { describe, expect, it } from 'vitest';
 import {
     collectTargetGuildIds,
     formatBanResults
-} from '../src/features/global-ban/index.js';
+} from '../src/features/moderation-commands/index.js';
 
-describe('global ban helpers', () => {
+describe('moderation command helpers', () => {
     it('collectTargetGuildIds deduplicates and aggregates from config and cache', () => {
         const config = {
             mainServerIds: ['123', '456', ''],

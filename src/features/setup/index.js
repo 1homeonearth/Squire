@@ -26,6 +26,9 @@ import { createRainbowBridgeSetup } from '../rainbow-bridge/setup.js';
 import { normalizeRainbowBridgeConfig, refresh as refreshRainbowBridge } from '../rainbow-bridge/index.js';
 import { createAutobouncerSetup } from '../auto-bouncer/setup.js';
 import { createExperienceSetup } from '../experience/setup.js';
+import { createPlaylistsSetup } from '../playlists/setup.js';
+import { normalizePlaylistsConfig } from '../playlists/index.js';
+import { createModerationSetup } from '../moderation-commands/setup.js';
 import {
     appendHomeButtonRow,
     collectCategories,
@@ -48,6 +51,8 @@ const rainbowSetup = createRainbowBridgeSetup({ panelStore, saveConfig, fetchGui
 const autobouncerSetup = createAutobouncerSetup({ panelStore, saveConfig, fetchGuild });
 const embedBuilderSetup = createEmbedBuilderSetup({ panelStore, saveConfig, fetchGuild });
 const experienceSetup = createExperienceSetup({ panelStore, saveConfig });
+const playlistsSetup = createPlaylistsSetup({ panelStore, saveConfig });
+const moderationSetup = createModerationSetup({ panelStore, saveConfig, fetchGuild, collectManageableGuilds });
 
 export const commands = [
     new SlashCommandBuilder()
@@ -144,6 +149,16 @@ export function init({ client, config, logger }) {
                 await experienceSetup.handleInteraction({ interaction, entry, config, client, key, logger });
                 return;
             }
+
+            if (module === 'playlists') {
+                await playlistsSetup.handleInteraction({ interaction, entry, config, key, logger });
+                return;
+            }
+
+            if (module === 'moderation') {
+                await moderationSetup.handleInteraction({ interaction, entry, config, client, key, logger });
+                return;
+            }
         } catch (err) {
             logger?.error?.(`[setup] Interaction error: ${err?.message ?? err}`);
             try {
@@ -171,6 +186,8 @@ function ensureConfigShape(config) {
     rainbowSetup.prepareConfig(config);
     embedBuilderSetup.prepareConfig(config);
     experienceSetup.prepareConfig(config);
+    playlistsSetup.prepareConfig(config);
+    moderationSetup.prepareConfig(config);
 }
 
 function sanitizeIdArray(value) {
@@ -279,6 +296,23 @@ async function buildHomeView({ client, config, guildOptions }) {
         ? formatChannel(loggingGuild, autobanChannelId)
         : (autobanChannelId ? `<#${autobanChannelId}>` : 'Not configured');
 
+    const playlistSummary = (() => {
+        const normalized = normalizePlaylistsConfig(config.playlists);
+        const spotify = normalized.spotify ? 'Spotify: ✅ configured' : 'Spotify: ⚠️ configure credentials';
+        const youtube = normalized.youtube ? 'YouTube: ✅ configured' : 'YouTube: ⚠️ configure credentials';
+        return `${spotify}\n${youtube}`;
+    })();
+
+    const moderationSummary = (() => {
+        const roleMap = config.moderationCommands?.roleMap ?? {};
+        const entries = Object.values(roleMap).filter(value => Array.isArray(value) && value.length);
+        if (!entries.length) {
+            return 'No moderator roles selected yet.';
+        }
+        const roleCount = entries.reduce((total, list) => total + list.length, 0);
+        return `${roleCount} role${roleCount === 1 ? '' : 's'} across ${entries.length} server${entries.length === 1 ? '' : 's'}.`;
+    })();
+
     const embed = new EmbedBuilder()
     .setTitle('Squire setup overview')
     .setDescription('Manage global targets and jump into module-specific configuration.')
@@ -315,6 +349,16 @@ async function buildHomeView({ client, config, guildOptions }) {
                 const ruleCount = guildEntries.reduce((total, entry) => total + (entry?.rules?.length ?? 0), 0);
                 return `${ruleCount} rule set${ruleCount === 1 ? '' : 's'} across ${guildEntries.length} server${guildEntries.length === 1 ? '' : 's'}.`;
             })(),
+            inline: false
+        },
+        {
+            name: 'Moderation commands',
+            value: moderationSummary,
+            inline: false
+        },
+        {
+            name: 'Playlist relay',
+            value: playlistSummary,
             inline: false
         }
     );
@@ -380,7 +424,9 @@ async function buildHomeView({ client, config, guildOptions }) {
         { label: 'Rainbow Bridge', value: 'rainbow', description: 'Link channels across servers.' },
         { label: 'Autobouncer', value: 'autobouncer', description: 'Manage autoban keywords and notification channel.' },
         { label: 'Embed builder', value: 'embed', description: 'Design reusable embeds with buttons.' },
-        { label: 'Experience Points', value: 'experience', description: 'Configure experience points rules and leaderboards.' }
+        { label: 'Experience Points', value: 'experience', description: 'Configure experience points rules and leaderboards.' },
+        { label: 'Moderation commands', value: 'moderation', description: 'Select moderator roles for each server.' },
+        { label: 'Playlist relay', value: 'playlists', description: 'Manage Spotify and YouTube credentials.' }
     );
     components.push(new ActionRowBuilder().addComponents(moduleMenu));
 
@@ -433,6 +479,17 @@ async function handleHomeInteraction({ interaction, config, client, logger, home
                 experienceEntry.context = {};
             }
             panelStore.set(experienceKey, experienceEntry);
+        }
+        const moderationKey = panelKey(interaction.user?.id, 'moderation');
+        const moderationEntry = panelStore.get(moderationKey);
+        if (moderationEntry) {
+            const available = await collectManageableGuilds({ client, userId: interaction.user.id });
+            moderationEntry.guildOptions = available;
+            if (moderationEntry.guildId && !available.some(opt => opt.id === moderationEntry.guildId)) {
+                moderationEntry.guildId = available[0]?.id ?? null;
+                moderationEntry.context = { guildId: moderationEntry.guildId ?? null };
+            }
+            panelStore.set(moderationKey, moderationEntry);
         }
         return;
     }
@@ -487,6 +544,17 @@ async function handleHomeInteraction({ interaction, config, client, logger, home
                 experienceEntry.context = {};
             }
             panelStore.set(experienceKey, experienceEntry);
+        }
+        const moderationKey = panelKey(interaction.user?.id, 'moderation');
+        const moderationEntry = panelStore.get(moderationKey);
+        if (moderationEntry) {
+            const available = await collectManageableGuilds({ client, userId: interaction.user.id });
+            moderationEntry.guildOptions = available;
+            if (moderationEntry.guildId && !available.some(opt => opt.id === moderationEntry.guildId)) {
+                moderationEntry.guildId = available[0]?.id ?? null;
+                moderationEntry.context = { guildId: moderationEntry.guildId ?? null };
+            }
+            panelStore.set(moderationKey, moderationEntry);
         }
         return;
     }
@@ -612,6 +680,34 @@ async function handleHomeInteraction({ interaction, config, client, logger, home
                 availableGuildIds: available
             });
             panelStore.set(homeKey, { message, guildOptions, view: 'module', module: 'experience' });
+            return;
+        }
+
+        if (target === 'moderation') {
+            const available = await collectManageableGuilds({ client, userId: interaction.user.id });
+            const built = await moderationSetup.buildView({ config, client, guildOptions: available, context: {} });
+            const message = await interaction.update(built.view ?? built);
+            panelStore.set(moduleKey, {
+                message,
+                guildId: built.desiredGuildId ?? null,
+                mode: 'overview',
+                context: { guildId: built.desiredGuildId ?? null },
+                guildOptions: available
+            });
+            panelStore.set(homeKey, { message, guildOptions, view: 'module', module: 'moderation' });
+            return;
+        }
+
+        if (target === 'playlists') {
+            const view = await playlistsSetup.buildView({ config });
+            const message = await interaction.update(view);
+            panelStore.set(moduleKey, {
+                message,
+                guildId: null,
+                mode: 'default',
+                context: {}
+            });
+            panelStore.set(homeKey, { message, guildOptions, view: 'module', module: 'playlists' });
             return;
         }
     }
