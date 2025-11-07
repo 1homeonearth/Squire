@@ -145,7 +145,7 @@ squire.db.json          # LokiJS JSON dump (created on first run if not present)
 
 1. **Install prerequisites** — Node.js 22+ and npm 10+.
 2. **Install dependencies** — `npm install`.
-3. **Run linting & tests** — `npm run lint` and `npm test` before pushing changes.
+3. **Run linting & tests** — `npm run lint` and `npm test` before pushing changes. Use `npm run test:watch` while developing to keep Vitest running between edits.
 4. **Type check (optional)** — `npm run build` invokes `tsc -p .` to surface declaration issues.
 5. **Deploy slash commands** — `node deploy-commands.js` now publishes `/setup` (and any future commands) globally by default so
    production hosts stay in sync even when `devGuildId` exists in `config.json`. Pass `--dev` (or export `SQUIRE_DEPLOY_DEV=1`)
