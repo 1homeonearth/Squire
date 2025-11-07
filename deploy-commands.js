@@ -28,6 +28,27 @@ const commands = [
         dm_permission: false
     },
     {
+        name: 'ban',
+        description: 'Ban a user across all managed servers',
+        default_member_permissions: String(PermissionFlagsBits.BanMembers),
+        dm_permission: false,
+        options: [
+            {
+                type: 6,
+                name: 'user',
+                description: 'User to ban across every managed server',
+                required: true
+            },
+            {
+                type: 3,
+                name: 'reason',
+                description: 'Reason to record in audit logs',
+                required: false,
+                max_length: 512
+            }
+        ]
+    },
+    {
         name: 'add',
         description: 'Add a Spotify track or YouTube video to the shared playlist',
         dm_permission: false,

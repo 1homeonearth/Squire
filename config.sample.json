@@ -10,6 +10,7 @@
   "featureOrder": [
     "setup",
     "auto-bouncer",
+    "global-ban",
     "logging-forwarder",
     "rainbow-bridge",
     "welcome-cards",

@@ -113,6 +113,9 @@ This is how new secrets/environment variables are picked up automatically at dep
 ## How Copilot and other agents should consume this file
 Treat `AGENTS.md` as the highest-priority repository guidance unless the current user prompt explicitly overrides it.
 
+## README discipline
+- Whenever you make changes in this repository (code, config, docs, tests, etc.), you **must** update `README.md` in the repo root to keep it accurate. Even tiny pull requests require a README touch-up that reflects the change.
+
 ## Operational facts
 - Server: MCS (Debian 13, systemd), SSH port 123, key-auth only.
 - Users: `root` (units/env), `squire` (owns `/opt/squire/app`), `sysadmin` (no sudo), `filegirl` (SFTP drop).
