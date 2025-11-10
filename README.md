@@ -1,4 +1,6 @@
 # Squire — Utility Bot for The Unbreakable Crown
+<!-- simple -->
+![Squire](assets/Squire.png)
 
 Squire is a multi-feature Discord bot that keeps the Unbreakable Crown server network in sync. It forwards activity into a central "Queen's Court" hub, greets new arrivals with bespoke welcome cards, keeps linked channels mirrored across servers, and automatically bans the wave of "mega/link" spam bots that have been raiding the community.
 
