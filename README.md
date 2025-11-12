@@ -410,6 +410,8 @@ Every module exposes a guided workflow inside `/setup`. The key behaviours are:
 - The overview lists existing bridges with controls to rename them, toggle bot forwarding, or delete them.
 - Opening a bridge reveals per-guild forms where you can select source channels, threads, and webhook endpoints. The module normalises IDs and backfills missing forms for any guilds in `mainServerIds`.
 - Use the **Add form** action to connect new guilds, and the provided buttons to copy webhook templates or remove obsolete entries.
+- The **Manage bridge** button now reveals a dropdown selector so you can pick a bridge without typing its ID.
+- Inside a bridge, the **Remove channel** action displays a multi-select dropdown of linked channels instead of requiring pasted IDs.
 
 #### Welcome Cards
 
