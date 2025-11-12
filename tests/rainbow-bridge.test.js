@@ -274,8 +274,10 @@ describe('rainbow bridge refresh hook', () => {
 
         await emit('messageCreate', makeMessage({ id: 'msg-after', content: 'Second wave' }));
 
-        expect(WebhookClient.instances.length).toBe(1);
-        const [targetWebhook] = WebhookClient.instances;
+        expect(WebhookClient.instances.length).toBe(2);
+        const targetWebhook = WebhookClient.instances.find(instance => instance.id === '222');
+        const originWebhook = WebhookClient.instances.find(instance => instance.id === '111');
+        expect(originWebhook?.send).toHaveBeenCalledTimes(1);
         expect(targetWebhook.send).toHaveBeenCalledTimes(1);
         const payload = targetWebhook.send.mock.calls[0]?.[0] ?? {};
         const embedDescription = payload.embeds?.[0]?.data?.description ?? payload.embeds?.[0]?.description ?? '';
@@ -290,6 +292,36 @@ describe('rainbow bridge refresh hook', () => {
             content: 'Mirrored message'
         }));
         expect(targetWebhook.send).toHaveBeenCalledTimes(1);
+    });
+
+    it('reposts rainbow bridge messages locally via webhook before deleting the source', async () => {
+        config.rainbowBridge.bridges.test = {
+            name: 'Uniform Bridge',
+            channels: [
+                { guildId: 'guild-1', channelId: 'chan-a', webhookUrl: 'https://discord.com/api/webhooks/111/tokenA' },
+                { guildId: 'guild-2', channelId: 'chan-b', webhookUrl: 'https://discord.com/api/webhooks/222/tokenB' }
+            ]
+        };
+        config.rainbowBridge = normalizeRainbowBridgeConfig(config.rainbowBridge);
+        refresh();
+
+        const message = makeMessage({ id: 'local-msg', content: 'Uniform content' });
+        message.delete = vi.fn(async () => {});
+
+        await emit('messageCreate', message);
+
+        const remoteWebhook = WebhookClient.instances.find(instance => instance.id === '222');
+        const localWebhook = WebhookClient.instances.find(instance => instance.id === '111');
+
+        expect(remoteWebhook?.send).toHaveBeenCalledTimes(1);
+        expect(localWebhook?.send).toHaveBeenCalledTimes(1);
+
+        const remotePayload = remoteWebhook.send.mock.calls[0]?.[0] ?? {};
+        const localPayload = localWebhook.send.mock.calls[0]?.[0] ?? {};
+        expect(remotePayload.content).toBe(localPayload.content);
+        expect(remotePayload.embeds).toEqual(localPayload.embeds);
+        expect(remotePayload.files).toEqual(localPayload.files);
+        expect(message.delete).toHaveBeenCalledTimes(1);
     });
 
     it('includes reaction summaries and syncs edits when reactions change', async () => {

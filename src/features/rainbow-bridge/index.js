@@ -1312,21 +1312,38 @@ export async function init({ client, config, logger, db }) {
             const parentId = message.channel?.parentId ?? message.channel?.parent?.id ?? null;
             if (parentId) originIds.add(parentId);
 
+            let shouldDeleteOriginal = false;
+
             for (const { bridgeId, bridge } of bridgesForChannel) {
                 if (!bridge.forwardBots && message.author?.bot) continue;
 
-                const targets = bridge.channels.filter((ch) => {
-                    const matchIds = ch.matchIds ?? new Set([ch.channelId]);
+                const seenTargets = new Set();
+                const targetEntries = [];
+                for (const channelEntry of bridge.channels) {
+                    const key = `${channelEntry.channelId}:${channelEntry.threadId ?? 'root'}`;
+                    if (seenTargets.has(key)) continue;
+                    seenTargets.add(key);
+
+                    const matchIds = channelEntry.matchIds ?? new Set([channelEntry.channelId]);
+                    let matchesOrigin = false;
                     for (const id of matchIds) {
-                        if (originIds.has(id)) return false;
+                        if (originIds.has(id)) {
+                            matchesOrigin = true;
+                            break;
+                        }
                     }
-                    return true;
-                });
-                if (!targets.length) continue;
+
+                    targetEntries.push({ target: channelEntry, isLocal: matchesOrigin });
+                }
+
+                const remoteTargets = targetEntries.filter((entry) => !entry.isLocal);
+                const localTargets = targetEntries.filter((entry) => entry.isLocal);
+                const orderedTargets = [...remoteTargets, ...localTargets];
+                if (!orderedTargets.length) continue;
 
                 const presentation = await buildPresentation({ message });
 
-                for (const target of targets) {
+                for (const { target, isLocal } of orderedTargets) {
                     const result = await prepareSendPayload({
                         message,
                         bridgeId,
@@ -1363,9 +1380,22 @@ export async function init({ client, config, logger, db }) {
                             targetThreadId: responseThreadId,
                             color
                         });
+
+                        if (isLocal && sent?.id) {
+                            shouldDeleteOriginal = true;
+                        }
                     } catch (err) {
                         logger?.warn?.(`[rainbow-bridge] Failed to forward message ${message.id} to ${target.channelId}: ${err?.message ?? err}`);
                     }
+                }
+            }
+
+            if (shouldDeleteOriginal && typeof message.delete === 'function') {
+                try {
+                    suppressDeletion(message.id);
+                    await message.delete();
+                } catch (err) {
+                    logger?.warn?.(`[rainbow-bridge] Failed to delete original message ${message.id}: ${err?.message ?? err}`);
                 }
             }
         } catch (err) {
