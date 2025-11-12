@@ -32,6 +32,7 @@ export function loadConfig() {
 
     if (process.env.MAPPING_JSON)         over.mapping = safeJSON(process.env.MAPPING_JSON, fileCfg.mapping);
     if (process.env.LOGGING_CHANNELS_JSON)over.loggingChannels = safeJSON(process.env.LOGGING_CHANNELS_JSON, fileCfg.loggingChannels);
+    if (process.env.MODERATION_LOGGING_JSON) over.moderationLogging = safeJSON(process.env.MODERATION_LOGGING_JSON, fileCfg.moderationLogging);
     if (process.env.EXCLUDE_CHANNELS_JSON)over.excludeChannels = safeJSON(process.env.EXCLUDE_CHANNELS_JSON, fileCfg.excludeChannels);
     if (process.env.EXCLUDE_CATEGORIES_JSON) over.excludeCategories = safeJSON(process.env.EXCLUDE_CATEGORIES_JSON, fileCfg.excludeCategories);
     if (process.env.RAINBOW_BRIDGE_BRIDGES_JSON) {
@@ -80,8 +81,18 @@ export function loadConfig() {
         over.loggingChannels = safeJSON(over.loggingChannels, {});
     }
 
+    if (typeof over.moderationLogging === 'string') {
+        over.moderationLogging = safeJSON(over.moderationLogging, {});
+    }
+
     if (!over.autoban || typeof over.autoban !== 'object') {
         over.autoban = fileCfg.autoban && typeof fileCfg.autoban === 'object' ? { ...fileCfg.autoban } : {};
+    }
+
+    if (!over.moderationLogging || typeof over.moderationLogging !== 'object') {
+        over.moderationLogging = fileCfg.moderationLogging && typeof fileCfg.moderationLogging === 'object'
+            ? { ...fileCfg.moderationLogging }
+            : {};
     }
 
     if (!over.moderationCommands || typeof over.moderationCommands !== 'object') {
