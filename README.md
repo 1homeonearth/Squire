@@ -109,6 +109,7 @@ Each `/setup` view ships with focused controls tailored to its feature module. U
 3. Use **Add channel** to provide a guild ID, channel ID, and optional webhook override. Existing forms show a ✅ status per guild.
 4. Click **Remove channel** to prune a guild from the bridge — removed entries are fully unlinked so they do not reappear after saving — or **Delete bridge** to tear it down entirely (confirmation required).
 5. Toggle **Enable/Disable bot mirroring** to override the default `forwardBots` flag per bridge.
+6. When a bridge mirrors a message, Squire deletes the source message before the webhook posts so only the mirrored copy remains.
 
 ### Auto bouncer
 1. Open `/setup` → **Autobouncer** and pick a guild.

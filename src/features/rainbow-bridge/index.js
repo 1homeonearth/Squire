@@ -1312,7 +1312,9 @@ export async function init({ client, config, logger, db }) {
             const parentId = message.channel?.parentId ?? message.channel?.parent?.id ?? null;
             if (parentId) originIds.add(parentId);
 
-            let shouldDeleteOriginal = false;
+            let sharedPresentation = null;
+            let originalDeleted = false;
+            let deleteWarningLogged = false;
 
             for (const { bridgeId, bridge } of bridgesForChannel) {
                 if (!bridge.forwardBots && message.author?.bot) continue;
@@ -1341,9 +1343,27 @@ export async function init({ client, config, logger, db }) {
                 const orderedTargets = [...remoteTargets, ...localTargets];
                 if (!orderedTargets.length) continue;
 
-                const presentation = await buildPresentation({ message });
+                if (!sharedPresentation) {
+                    sharedPresentation = await buildPresentation({ message });
+                }
 
-                for (const { target, isLocal } of orderedTargets) {
+                if (!originalDeleted && typeof message.delete === 'function') {
+                    try {
+                        suppressDeletion(message.id);
+                        await message.delete();
+                        originalDeleted = true;
+                    } catch (err) {
+                        runtime.suppressedDeletes.delete(message.id);
+                        if (!deleteWarningLogged) {
+                            logger?.warn?.(`[rainbow-bridge] Failed to delete original message ${message.id} before mirroring: ${err?.message ?? err}`);
+                            deleteWarningLogged = true;
+                        }
+                    }
+                }
+
+                const presentation = sharedPresentation;
+
+                for (const { target } of orderedTargets) {
                     const result = await prepareSendPayload({
                         message,
                         bridgeId,
@@ -1380,22 +1400,9 @@ export async function init({ client, config, logger, db }) {
                             targetThreadId: responseThreadId,
                             color
                         });
-
-                        if (isLocal && sent?.id) {
-                            shouldDeleteOriginal = true;
-                        }
                     } catch (err) {
                         logger?.warn?.(`[rainbow-bridge] Failed to forward message ${message.id} to ${target.channelId}: ${err?.message ?? err}`);
                     }
-                }
-            }
-
-            if (shouldDeleteOriginal && typeof message.delete === 'function') {
-                try {
-                    suppressDeletion(message.id);
-                    await message.delete();
-                } catch (err) {
-                    logger?.warn?.(`[rainbow-bridge] Failed to delete original message ${message.id}: ${err?.message ?? err}`);
                 }
             }
         } catch (err) {
