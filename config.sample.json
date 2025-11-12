@@ -16,7 +16,8 @@
     "welcome-cards",
     "experience",
     "spotlight-gallery",
-    "playlists"
+    "playlists",
+    "project-liner"
   ],
   "mapping": "$ENV{MAPPING_JSON}",
   "loggingChannels": "$ENV{LOGGING_CHANNELS_JSON}",
@@ -93,6 +94,22 @@
       "allowSelf": false,
       "emojis": ["⭐"]
     }
+  },
+  "projectLiner": {
+    "projects": [
+      {
+        "id": "launch-plan",
+        "title": "Launch plan",
+        "summary": "Outline launch milestones and owners.",
+        "lines": [
+          "Define success metrics",
+          "Schedule volunteer kickoff",
+          "Share update with leadership"
+        ],
+        "status": "draft"
+      }
+    ],
+    "activeProjectId": null
   },
   "moderationCommands": {
     "roleMap": "$ENV{MODERATION_ROLE_MAP_JSON}"

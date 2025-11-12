@@ -62,6 +62,10 @@ cd Squire-main
   - Mirrors the cleaned link back into the invoking channel via managed webhooks while preserving Discord's native YouTube player.
   - Attempts to mirror each submission onto the opposite platform when the artist/title can be matched exactly (Spotify ↔ YouTube), reporting when a match cannot be found.
   - Configure Spotify/YouTube client credentials and the duplicate-skipping toggle directly from the `/setup` panel instead of editing JSON by hand.
+- **Lined projects** (`src/features/project-liner/`)
+  - Lets staff capture multi-line project briefs that can be browsed with the `/project` slash command.
+  - Tracks status (draft, active, complete), summaries, and numbered line items so long-running initiatives stay organised.
+  - `/setup → Lined projects` ships creation, renaming, line editing, status toggles, and safe deletion flows — no JSON editing required.
 - **Setup panel** (`src/features/setup/`)
   - Provides the `/setup` slash command that gives admins an in-Discord control panel for every module.
   - Manages logging destinations, welcome channel reminders, rainbow bridge links, autobouncer keywords, experience rules, and embed builder presets without editing `config.json` manually.
@@ -141,6 +145,14 @@ Each `/setup` view ships with focused controls tailored to its feature module. U
 4. Pick a main server from the dropdown to edit per-guild playlist IDs, then click **Set Spotify playlist** or **Set YouTube playlist** to save the IDs for that server.
    - You can paste either the raw playlist ID or a full playlist URL — Squire normalises URLs to IDs automatically when saving.
 5. Once both platforms are configured, `/add` mirrors submissions to both playlists whenever an exact artist/title match is found (reporting when matches cannot be located).
+
+### Lined projects
+
+1. Open `/setup` → **Lined projects** to view the current catalogue of briefs and the active project.
+2. Use **Create project** to supply a title, optional slug, summary, and newline-separated lines in a single modal.
+3. Select an existing project to rename it, update the summary, adjust the lines block, or delete it entirely (confirmation required).
+4. Cycle through statuses (draft → active → complete) to signal project health, and mark which project should be the default for `/project view`.
+5. `/project list` and `/project view` let staff browse the curated briefs without re-opening the setup panel.
 
 ## Repository layout
 
