@@ -23,7 +23,9 @@
     "canvacord": "^6.0.4",
     "discord.js": "^14.24.0",
     "dotenv": "^16.4.5",
-    "lokijs": "^1.5.12"
+    "lokijs": "^1.5.12",
+    "express": "5.1.0",
+    "zod": "4.1.12"
   },
   "devDependencies": {
     "@types/node": "^22.18.13",
