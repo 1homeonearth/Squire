@@ -43,6 +43,10 @@ cd Squire-main
   - Ships `/ban`, `/unban`, `/kick`, and `/timeout` slash commands so staff can moderate without leaving Discord.
   - `/ban` and `/unban` continue to propagate across every managed server, while `/kick` and `/timeout` act on the invoking guild with detailed success/failure reporting.
   - Access is restricted to moderator roles selected in `/setup` (with **Manage Server**/**Administrator** as a fallback) so only approved staff can execute the commands.
+- **Moderation logging** (`src/features/moderation-logging/`)
+  - Streams moderator discipline (bans, unbans, kicks, timeouts) into a dedicated actions channel inside the logging server.
+  - Captures category lifecycle changes (create/update/delete) with executor + reason context pulled from the audit log.
+  - Configure action/category destinations inside `/setup` to keep staff updates separate from the main message forwarder.
 - **Rainbow Bridge** (`src/features/rainbow-bridge/`)
   - Mirrors messages, edits, and deletions across linked channels spanning multiple guilds.
   - Supports per-bridge overrides for bot forwarding, friendly bridge names, and automatic embed cleanup for rich media.
@@ -579,6 +583,7 @@ All configuration lives in `config.json`, which is materialised by `scripts/rend
 | `debugLevel` | `none`, `info`, or `verbose` to control console logging verbosity. |
 | `mapping` | Object mapping **source guild IDs** to **destination webhook URLs** in the Queen's Court. |
 | `loggingChannels` | Optional map of log categories (`messages`, `moderation`, `joins`, `system`) to dedicated channel IDs in the logging server. |
+| `moderationLogging` | Optional object with `categoryChannelId`/`actionChannelId` for moderator category and action logs. |
 | `excludeChannels` | Per-guild arrays of source channel IDs to ignore while forwarding. |
 | `excludeCategories` | Per-guild arrays of category IDs to ignore while forwarding. |
 | `rainbowBridge` | Two-way bridge config block (see below). |
@@ -699,8 +704,9 @@ Use `node scripts/spotify-refresh-token.mjs` or `node scripts/youtube-refresh-to
 
 The `/setup` command opens an overview for operators with the **Manage Server** permission:
 
-- Pick the logging server and the list of “main” servers once, then jump into the Logging, Welcome Cards, or Autobouncer modules from any guild.
+- Pick the logging server and the list of “main” servers once, then jump into the Logging, Moderation Logging, Welcome Cards, or Autobouncer modules from any guild.
 - Logging — select which main server to configure, link it to a logging channel inside the logging server, manage excluded channels/categories, assign dedicated logging categories, and tune the sampling/bot-forwarding options.
+- Moderation Logging — assign dedicated channels in the logging server for staff actions and category updates, keeping discipline chatter separate from message mirrors.
 - Welcome Cards — choose a target server, set its welcome channel, and pick (or clear) the rules/roles/verify references individually.
 - Rainbow Bridge — link channels across servers so messages, edits, and deletions stay in sync everywhere.
 - Autobouncer — toggle the module, edit the blocked keyword list, and choose the logging server channel that receives autobounce notifications.
@@ -718,6 +724,7 @@ Every change is persisted to `config.json`, so redeploys and restarts keep the c
 | `LOGGING_SERVER_ID` | Overrides `config.loggingServerId`. |
 | `MAPPING_JSON` | JSON string (object) that replaces `config.mapping`. |
 | `LOGGING_CHANNELS_JSON` | JSON object overriding `config.loggingChannels`. |
+| `MODERATION_LOGGING_JSON` | JSON object overriding `config.moderationLogging`. |
 | `EXCLUDE_CHANNELS_JSON` | JSON object overriding `config.excludeChannels`. |
 | `EXCLUDE_CATEGORIES_JSON` | JSON object overriding `config.excludeCategories`. |
 | `RAINBOW_BRIDGE_BRIDGES_JSON` | JSON object overriding `config.rainbowBridge.bridges`. |

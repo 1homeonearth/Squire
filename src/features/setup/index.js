@@ -18,6 +18,7 @@ import { createPlaylistsSetup } from '../playlists/setup.js';
 import { createSpotlightSetup } from '../spotlight-gallery/setup.js';
 import { normalizePlaylistsConfig } from '../playlists/index.js';
 import { createModerationSetup } from '../moderation-commands/setup.js';
+import { createModerationLoggingSetup } from '../moderation-logging/setup.js';
 import { normalizeSpotlightConfig } from '../spotlight-gallery/index.js';
 import {
     appendHomeButtonRow,
@@ -38,6 +39,7 @@ const experienceSetup = createExperienceSetup({ panelStore, saveConfig });
 const playlistsSetup = createPlaylistsSetup({ panelStore, saveConfig });
 const spotlightSetup = createSpotlightSetup({ panelStore, saveConfig, fetchGuild });
 const moderationSetup = createModerationSetup({ panelStore, saveConfig, fetchGuild, collectManageableGuilds });
+const moderationLoggingSetup = createModerationLoggingSetup({ panelStore, saveConfig, fetchGuild });
 
 export const commands = [
     new SlashCommandBuilder()
@@ -149,6 +151,11 @@ export function init({ client, config, logger }) {
                 await moderationSetup.handleInteraction({ interaction, entry, config, client, key, logger });
                 return;
             }
+
+            if (module === 'modlog') {
+                await moderationLoggingSetup.handleInteraction({ interaction, entry, config, client, key, logger });
+                return;
+            }
         } catch (err) {
             logger?.error?.(`[setup] Interaction error: ${err?.message ?? err}`);
             try {
@@ -179,6 +186,7 @@ function ensureConfigShape(config) {
     playlistsSetup.prepareConfig(config);
     spotlightSetup.prepareConfig(config);
     moderationSetup.prepareConfig(config);
+    moderationLoggingSetup.prepareConfig(config);
 }
 
 function sanitizeIdArray(value) {
@@ -314,6 +322,15 @@ async function buildHomeView({ client, config, guildOptions }) {
         return `${roleCount} role${roleCount === 1 ? '' : 's'} across ${entries.length} server${entries.length === 1 ? '' : 's'}.`;
     })();
 
+    const moderationLoggingSummary = (() => {
+        const cfg = config.moderationLogging || {};
+        const selections = [cfg.categoryChannelId, cfg.actionChannelId].filter(Boolean).length;
+        if (!selections) {
+            return 'No moderation logging channels selected yet.';
+        }
+        return `${selections}/2 destinations configured.`;
+    })();
+
     const embed = new EmbedBuilder()
     .setTitle('Squire setup overview')
     .setDescription('Manage global targets and jump into module-specific configuration.')
@@ -355,6 +372,11 @@ async function buildHomeView({ client, config, guildOptions }) {
         {
             name: 'Moderation commands',
             value: moderationSummary,
+            inline: false
+        },
+        {
+            name: 'Moderation logging',
+            value: moderationLoggingSummary,
             inline: false
         },
         {
@@ -432,6 +454,7 @@ async function buildHomeView({ client, config, guildOptions }) {
         { label: 'Embed builder', value: 'embed', description: 'Design reusable embeds with buttons.' },
         { label: 'Experience Points', value: 'experience', description: 'Configure experience points rules and leaderboards.' },
         { label: 'Moderation commands', value: 'moderation', description: 'Select moderator roles for each server.' },
+        { label: 'Moderation logging', value: 'modlog', description: 'Route moderator actions and category updates.' },
         { label: 'Spotlight gallery', value: 'spotlight', description: 'Celebrate standout posts with reaction thresholds.' },
         { label: 'Playlist relay', value: 'playlists', description: 'Manage Spotify and YouTube credentials.' }
     );
@@ -507,6 +530,10 @@ async function handleHomeInteraction({ interaction, config, client, logger, home
                 moderationEntry.context = { guildId: moderationEntry.guildId ?? null };
             }
             panelStore.set(moderationKey, moderationEntry);
+        }
+        const modlogKey = panelKey(interaction.user?.id, 'modlog');
+        if (panelStore.has(modlogKey)) {
+            panelStore.delete(modlogKey);
         }
         return;
     }
@@ -732,6 +759,18 @@ async function handleHomeInteraction({ interaction, config, client, logger, home
                 guildOptions: available
             });
             panelStore.set(homeKey, { message, guildOptions, view: 'module', module: 'moderation' });
+            return;
+        }
+
+        if (target === 'modlog') {
+            const built = await moderationLoggingSetup.buildView({ config, client, context: {} });
+            const message = await interaction.update(built);
+            panelStore.set(moduleKey, {
+                message,
+                context: {},
+                mode: 'default'
+            });
+            panelStore.set(homeKey, { message, guildOptions, view: 'module', module: 'modlog' });
             return;
         }
 
