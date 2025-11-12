@@ -40,6 +40,7 @@ vi.mock('discord.js', async () => {
 
 import { WebhookClient, ChannelType, Collection, StickerFormatType } from 'discord.js';
 import { init, normalizeRainbowBridgeConfig, refresh } from '../src/features/rainbow-bridge/index.js';
+import { pruneBridgeChannels } from '../src/features/rainbow-bridge/setup-helpers.js';
 import { createDb } from '../src/core/db.js';
 
 async function createTempDb() {
@@ -136,6 +137,49 @@ describe('normalizeRainbowBridgeConfig', () => {
             guildId: '789',
             channelId: '101'
         });
+    });
+});
+
+describe('pruneBridgeChannels', () => {
+    it('removes channels and matching forms when selections overlap', () => {
+        const bridge = {
+            channels: [
+                { guildId: '123', channelId: '456', webhookUrl: 'https://discord.com/api/webhooks/111/tokenA' },
+                { guildId: '789', channelId: '000', webhookUrl: 'https://discord.com/api/webhooks/222/tokenB' }
+            ],
+            forms: {
+                '123': { guildId: '123', channelId: '456', webhookUrl: 'https://discord.com/api/webhooks/111/tokenA' },
+                '789': { guildId: '789', channelId: '000', webhookUrl: 'https://discord.com/api/webhooks/222/tokenB' }
+            }
+        };
+
+        const result = pruneBridgeChannels(bridge, new Set(['123:456']));
+
+        expect(result.removed).toBe(1);
+        expect(bridge.channels).toEqual([
+            { guildId: '789', channelId: '000', webhookUrl: 'https://discord.com/api/webhooks/222/tokenB' }
+        ]);
+        expect(bridge.forms['123']).toBeUndefined();
+        expect(bridge.forms['789']).toBeDefined();
+    });
+
+    it('keeps bridge state intact when nothing matches', () => {
+        const bridge = {
+            channels: [
+                { guildId: '123', channelId: '456', webhookUrl: 'https://discord.com/api/webhooks/111/tokenA' }
+            ],
+            forms: {
+                '123': { guildId: '123', channelId: '456', webhookUrl: 'https://discord.com/api/webhooks/111/tokenA' }
+            }
+        };
+
+        const result = pruneBridgeChannels(bridge, new Set(['999:000']));
+
+        expect(result.removed).toBe(0);
+        expect(bridge.channels).toEqual([
+            { guildId: '123', channelId: '456', webhookUrl: 'https://discord.com/api/webhooks/111/tokenA' }
+        ]);
+        expect(bridge.forms['123']).toBeDefined();
     });
 });
 

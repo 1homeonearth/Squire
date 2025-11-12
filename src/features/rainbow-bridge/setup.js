@@ -21,6 +21,7 @@ import {
     normalizeRainbowBridgeConfig,
     refresh as refreshRainbowBridge
 } from './index.js';
+import { pruneBridgeChannels } from './setup-helpers.js';
 
 export function createRainbowBridgeSetup({ panelStore, saveConfig, fetchGuild, collectManageableGuilds }) {
     function prepareConfig(config) {
@@ -234,13 +235,7 @@ export function createRainbowBridgeSetup({ panelStore, saveConfig, fetchGuild, c
                     return;
                 }
 
-                const before = bridges[bridgeId].channels?.length ?? 0;
-                bridges[bridgeId].channels = (bridges[bridgeId].channels || []).filter((channel) => {
-                    const token = `${channel.guildId}:${channel.channelId}`;
-                    return !selections.has(token);
-                });
-                const after = bridges[bridgeId].channels.length;
-                const removed = Math.max(0, before - after);
+                const { removed } = pruneBridgeChannels(bridges[bridgeId], selections);
                 config.rainbowBridge = normalizeRainbowBridgeConfig(config.rainbowBridge);
                 refreshRainbowBridge();
                 saveConfig(config, logger);
