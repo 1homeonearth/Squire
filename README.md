@@ -99,7 +99,7 @@ Each `/setup` view ships with focused controls tailored to its feature module. U
 1. Open `/setup` → **Rainbow bridge**. Press **Create bridge** to open the modal — supply a unique bridge ID (letters/numbers/-/_), optional display name, and description.
 2. Pick a bridge from the select menu and click **Manage bridge** to view its per-guild forms.
 3. Use **Add channel** to provide a guild ID, channel ID, and optional webhook override. Existing forms show a ✅ status per guild.
-4. Click **Remove channel** to prune a guild from the bridge or **Delete bridge** to tear it down entirely (confirmation required).
+4. Click **Remove channel** to prune a guild from the bridge — removed entries are fully unlinked so they do not reappear after saving — or **Delete bridge** to tear it down entirely (confirmation required).
 5. Toggle **Enable/Disable bot mirroring** to override the default `forwardBots` flag per bridge.
 
 ### Auto bouncer
