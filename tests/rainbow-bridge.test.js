@@ -294,7 +294,7 @@ describe('rainbow bridge refresh hook', () => {
         expect(targetWebhook.send).toHaveBeenCalledTimes(1);
     });
 
-    it('reposts rainbow bridge messages locally via webhook before deleting the source', async () => {
+    it('deletes the source message before reposting via the bridge webhooks', async () => {
         config.rainbowBridge.bridges.test = {
             name: 'Uniform Bridge',
             channels: [
@@ -322,6 +322,12 @@ describe('rainbow bridge refresh hook', () => {
         expect(remotePayload.embeds).toEqual(localPayload.embeds);
         expect(remotePayload.files).toEqual(localPayload.files);
         expect(message.delete).toHaveBeenCalledTimes(1);
+
+        const deleteCallOrder = message.delete.mock.invocationCallOrder?.[0] ?? Number.POSITIVE_INFINITY;
+        const remoteCallOrder = remoteWebhook.send.mock.invocationCallOrder?.[0] ?? Number.POSITIVE_INFINITY;
+        const localCallOrder = localWebhook.send.mock.invocationCallOrder?.[0] ?? Number.POSITIVE_INFINITY;
+        expect(deleteCallOrder).toBeLessThan(remoteCallOrder);
+        expect(deleteCallOrder).toBeLessThan(localCallOrder);
     });
 
     it('includes reaction summaries and syncs edits when reactions change', async () => {
