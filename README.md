@@ -49,7 +49,7 @@ cd Squire-main
   - Configure action/category destinations inside `/setup` to keep staff updates separate from the main message forwarder.
 - **Rainbow Bridge** (`src/features/rainbow-bridge/`)
   - Mirrors messages, edits, and deletions across linked channels spanning multiple guilds.
-  - Supports per-bridge overrides for bot forwarding, friendly bridge names, and automatic embed cleanup for rich media.
+  - Supports per-bridge overrides for bot forwarding, friendly bridge names, one-way mirroring, and automatic embed cleanup for rich media.
 - **Experience system** (`src/features/experience/`)
   - Awards XP for messages, reactions, and voice activity using per-guild rule sets with cooldowns, multipliers, and blacklists.
   - Ships the `/xp set` moderator command for adjusting a member's total and persists totals in LokiJS collections.
@@ -109,7 +109,8 @@ Each `/setup` view ships with focused controls tailored to its feature module. U
 3. Use **Add channel** to provide a guild ID, channel ID, and optional webhook override. Existing forms show a ✅ status per guild.
 4. Click **Remove channel** to prune a guild from the bridge — removed entries are fully unlinked so they do not reappear after saving — or **Delete bridge** to tear it down entirely (confirmation required).
 5. Toggle **Enable/Disable bot mirroring** to override the default `forwardBots` flag per bridge.
-6. When a bridge mirrors a message, Squire deletes the source message before the webhook posts so only the mirrored copy remains.
+6. Switch between **Switch to one-way**/**Switch to two-way** to decide whether every server mirrors messages or only designated source servers broadcast outward. When one-way mode is active, use **Edit source servers** to pick which guilds should originate mirrored posts — receivers keep their local messages untouched.
+7. When a bridge mirrors a message, Squire deletes the source message before the webhook posts so only the mirrored copy remains.
 
 ### Auto bouncer
 1. Open `/setup` → **Autobouncer** and pick a guild.
