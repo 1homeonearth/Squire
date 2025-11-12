@@ -19,6 +19,8 @@ import { createSpotlightSetup } from '../spotlight-gallery/setup.js';
 import { normalizePlaylistsConfig } from '../playlists/index.js';
 import { createModerationSetup } from '../moderation-commands/setup.js';
 import { normalizeSpotlightConfig } from '../spotlight-gallery/index.js';
+import { createProjectLinerSetup } from '../project-liner/setup.js';
+import { normalizeProjectLinerConfig } from '../project-liner/index.js';
 import {
     appendHomeButtonRow,
     formatChannel,
@@ -38,6 +40,7 @@ const experienceSetup = createExperienceSetup({ panelStore, saveConfig });
 const playlistsSetup = createPlaylistsSetup({ panelStore, saveConfig });
 const spotlightSetup = createSpotlightSetup({ panelStore, saveConfig, fetchGuild });
 const moderationSetup = createModerationSetup({ panelStore, saveConfig, fetchGuild, collectManageableGuilds });
+const projectLinerSetup = createProjectLinerSetup({ panelStore, saveConfig });
 
 export const commands = [
     new SlashCommandBuilder()
@@ -140,6 +143,11 @@ export function init({ client, config, logger }) {
                 return;
             }
 
+            if (module === 'projectliner') {
+                await projectLinerSetup.handleInteraction({ interaction, entry, config, key, logger });
+                return;
+            }
+
             if (module === 'spotlight') {
                 await spotlightSetup.handleInteraction({ interaction, entry, config, client, key, logger });
                 return;
@@ -179,6 +187,7 @@ function ensureConfigShape(config) {
     playlistsSetup.prepareConfig(config);
     spotlightSetup.prepareConfig(config);
     moderationSetup.prepareConfig(config);
+    projectLinerSetup.prepareConfig(config);
 }
 
 function sanitizeIdArray(value) {
@@ -366,6 +375,20 @@ async function buildHomeView({ client, config, guildOptions }) {
             name: 'Spotlight gallery',
             value: spotlightSummary,
             inline: false
+        },
+        {
+            name: 'Lined projects',
+            value: (() => {
+                const normalized = normalizeProjectLinerConfig(config.projectLiner);
+                if (!normalized.projects.length) {
+                    return 'No projects created yet.';
+                }
+                const activeLabel = normalized.activeProjectId
+                    ? `Active: \`${normalized.activeProjectId}\``
+                    : 'Active project not selected.';
+                return `${normalized.projects.length} project${normalized.projects.length === 1 ? '' : 's'} configured. ${activeLabel}`;
+            })(),
+            inline: false
         }
     );
 
@@ -433,7 +456,8 @@ async function buildHomeView({ client, config, guildOptions }) {
         { label: 'Experience Points', value: 'experience', description: 'Configure experience points rules and leaderboards.' },
         { label: 'Moderation commands', value: 'moderation', description: 'Select moderator roles for each server.' },
         { label: 'Spotlight gallery', value: 'spotlight', description: 'Celebrate standout posts with reaction thresholds.' },
-        { label: 'Playlist relay', value: 'playlists', description: 'Manage Spotify and YouTube credentials.' }
+        { label: 'Playlist relay', value: 'playlists', description: 'Manage Spotify and YouTube credentials.' },
+        { label: 'Lined projects', value: 'projectliner', description: 'Curate multi-line project briefs for staff.' }
     );
     components.push(new ActionRowBuilder().addComponents(moduleMenu));
 
@@ -762,6 +786,20 @@ async function handleHomeInteraction({ interaction, config, client, logger, home
                 context: {}
             });
             panelStore.set(homeKey, { message, guildOptions, view: 'module', module: 'playlists' });
+            return;
+        }
+
+        if (target === 'projectliner') {
+            const built = await projectLinerSetup.buildView({ config, mode: 'default', context: {} });
+            const message = await interaction.update(built.view ?? built);
+            panelStore.set(moduleKey, {
+                message,
+                guildId: null,
+                mode: 'default',
+                context: { selectedId: built.selectedId ?? null },
+                selectedId: built.selectedId ?? null
+            });
+            panelStore.set(homeKey, { message, guildOptions, view: 'module', module: 'projectliner' });
             return;
         }
     }
