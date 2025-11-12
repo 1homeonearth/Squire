@@ -1,3 +1,5 @@
+cd /opt/squire/app
+cat > mcp/internal-api.mjs <<'JS'
 // mcp/internal-api.mjs
 import express from "express";
 import { z } from "zod";
@@ -29,8 +31,8 @@ export function startInternalApi({ client, logger = console }) {
   const app = express();
   app.disable("x-powered-by"); // reduce passive fingerprinting
   app.use(express.json({ limit: "64kb" }));
-  app.use((req, res, next) => {
-    // basic hardening + no caching for control plane
+  app.use((_, res, next) => {
+    // control-plane hardening
     res.set("Cache-Control", "no-store");
     res.set("X-Content-Type-Options", "nosniff");
     next();
@@ -136,3 +138,6 @@ export function startInternalApi({ client, logger = console }) {
 
   return { close: () => server.close() };
 }
+JS
+git add mcp/internal-api.mjs
+git status -sb
