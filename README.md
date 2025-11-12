@@ -53,6 +53,10 @@ cd Squire-main
   - Lets staff compose reusable announcement embeds (preface text, color, title, description) and up to five HTTPS buttons directly from `/setup`.
   - Supports multiple named presets per guild so announcements can be saved, duplicated, renamed, and deleted without losing older layouts.
   - Stores the latest configuration in `config.embedBuilder` so announcements can be posted consistently across guilds.
+- **Spotlight gallery** (`src/features/spotlight-gallery/`)
+  - Reposts standout messages into a dedicated highlights channel once they collect a configurable number of matching reactions.
+  - Supports per-guild emoji triggers, thresholds, and optional self-reaction counting so each server can tune what deserves a spotlight.
+  - Keeps native YouTube playback intact by mirroring the original link text alongside the curated embed preview.
 - **Playlist relay** (`src/features/playlists/`)
   - Adds the `/add` command for piping Spotify tracks or YouTube videos into shared playlists using OAuth credentials.
   - Mirrors the cleaned link back into the invoking channel via managed webhooks while preserving Discord's native YouTube player.
@@ -121,6 +125,14 @@ Each `/setup` view ships with focused controls tailored to its feature module. U
 3. Use **Set pre-text**, **Set title**, and **Set content** to open modals for each field. Color selection lives under **Select embed color…**.
 4. Manage buttons via **Manage buttons** → **Add link button** or **Clear buttons** (max five HTTPS buttons). The removal multi-select trims selected entries.
 5. Click **Post embed** to send the embed immediately to the configured channel. Squire logs failures and replies with the status.
+
+### Spotlight gallery
+
+1. Open `/setup` → **Spotlight gallery** and choose a main server to manage.
+2. Toggle **Enable module/Disable module** to control whether highlights post for that guild.
+3. Use **Set channel/Change channel** to pick the highlight destination; the panel lists every text channel in the selected server.
+4. Tap **Edit emojis** to provide the comma- or newline-separated list of reaction emoji that should count toward the threshold (custom emoji are supported via `<:name:id>` syntax).
+5. Hit **Set threshold** to choose how many matching reactions are required and **Allow/Disallow self-reactions** to decide whether the author’s own reaction should count.
 
 ### Playlists
 1. Open `/setup` → **Playlists**. The top section shows credential health for Spotify and YouTube.

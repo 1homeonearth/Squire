@@ -15,8 +15,10 @@ import { createRainbowBridgeSetup } from '../rainbow-bridge/setup.js';
 import { createAutobouncerSetup } from '../auto-bouncer/setup.js';
 import { createExperienceSetup } from '../experience/setup.js';
 import { createPlaylistsSetup } from '../playlists/setup.js';
+import { createSpotlightSetup } from '../spotlight-gallery/setup.js';
 import { normalizePlaylistsConfig } from '../playlists/index.js';
 import { createModerationSetup } from '../moderation-commands/setup.js';
+import { normalizeSpotlightConfig } from '../spotlight-gallery/index.js';
 import {
     appendHomeButtonRow,
     formatChannel,
@@ -34,6 +36,7 @@ const autobouncerSetup = createAutobouncerSetup({ panelStore, saveConfig, fetchG
 const embedBuilderSetup = createEmbedBuilderSetup({ panelStore, saveConfig, fetchGuild });
 const experienceSetup = createExperienceSetup({ panelStore, saveConfig });
 const playlistsSetup = createPlaylistsSetup({ panelStore, saveConfig });
+const spotlightSetup = createSpotlightSetup({ panelStore, saveConfig, fetchGuild });
 const moderationSetup = createModerationSetup({ panelStore, saveConfig, fetchGuild, collectManageableGuilds });
 
 export const commands = [
@@ -137,6 +140,11 @@ export function init({ client, config, logger }) {
                 return;
             }
 
+            if (module === 'spotlight') {
+                await spotlightSetup.handleInteraction({ interaction, entry, config, client, key, logger });
+                return;
+            }
+
             if (module === 'moderation') {
                 await moderationSetup.handleInteraction({ interaction, entry, config, client, key, logger });
                 return;
@@ -169,6 +177,7 @@ function ensureConfigShape(config) {
     embedBuilderSetup.prepareConfig(config);
     experienceSetup.prepareConfig(config);
     playlistsSetup.prepareConfig(config);
+    spotlightSetup.prepareConfig(config);
     moderationSetup.prepareConfig(config);
 }
 
@@ -285,6 +294,16 @@ async function buildHomeView({ client, config, guildOptions }) {
         return `${spotify}\n${youtube}`;
     })();
 
+    const spotlightSummary = (() => {
+        const normalized = normalizeSpotlightConfig(config.spotlightGallery);
+        const entries = Object.values(normalized);
+        if (!entries.length) {
+            return 'No servers configured yet.';
+        }
+        const enabled = entries.filter(entry => entry.enabled && entry.channelId).length;
+        return `${enabled}/${entries.length} server${entries.length === 1 ? '' : 's'} forwarding highlights.`;
+    })();
+
     const moderationSummary = (() => {
         const roleMap = config.moderationCommands?.roleMap ?? {};
         const entries = Object.values(roleMap).filter(value => Array.isArray(value) && value.length);
@@ -341,6 +360,11 @@ async function buildHomeView({ client, config, guildOptions }) {
         {
             name: 'Playlist relay',
             value: playlistSummary,
+            inline: false
+        },
+        {
+            name: 'Spotlight gallery',
+            value: spotlightSummary,
             inline: false
         }
     );
@@ -408,6 +432,7 @@ async function buildHomeView({ client, config, guildOptions }) {
         { label: 'Embed builder', value: 'embed', description: 'Design reusable embeds with buttons.' },
         { label: 'Experience Points', value: 'experience', description: 'Configure experience points rules and leaderboards.' },
         { label: 'Moderation commands', value: 'moderation', description: 'Select moderator roles for each server.' },
+        { label: 'Spotlight gallery', value: 'spotlight', description: 'Celebrate standout posts with reaction thresholds.' },
         { label: 'Playlist relay', value: 'playlists', description: 'Manage Spotify and YouTube credentials.' }
     );
     components.push(new ActionRowBuilder().addComponents(moduleMenu));
@@ -461,6 +486,16 @@ async function handleHomeInteraction({ interaction, config, client, logger, home
                 experienceEntry.context = {};
             }
             panelStore.set(experienceKey, experienceEntry);
+        }
+        const spotlightKey = panelKey(interaction.user?.id, 'spotlight');
+        const spotlightEntry = panelStore.get(spotlightKey);
+        if (spotlightEntry) {
+            spotlightEntry.availableGuildIds = config.mainServerIds;
+            if (spotlightEntry.guildId && !config.mainServerIds.includes(spotlightEntry.guildId)) {
+                spotlightEntry.guildId = config.mainServerIds[0] ?? null;
+                spotlightEntry.mode = 'default';
+            }
+            panelStore.set(spotlightKey, spotlightEntry);
         }
         const moderationKey = panelKey(interaction.user?.id, 'moderation');
         const moderationEntry = panelStore.get(moderationKey);
@@ -526,6 +561,16 @@ async function handleHomeInteraction({ interaction, config, client, logger, home
                 experienceEntry.context = {};
             }
             panelStore.set(experienceKey, experienceEntry);
+        }
+        const spotlightKey = panelKey(interaction.user?.id, 'spotlight');
+        const spotlightEntry = panelStore.get(spotlightKey);
+        if (spotlightEntry) {
+            spotlightEntry.availableGuildIds = config.mainServerIds;
+            if (spotlightEntry.guildId && !config.mainServerIds.includes(spotlightEntry.guildId)) {
+                spotlightEntry.guildId = config.mainServerIds[0] ?? null;
+                spotlightEntry.mode = 'default';
+            }
+            panelStore.set(spotlightKey, spotlightEntry);
         }
         const moderationKey = panelKey(interaction.user?.id, 'moderation');
         const moderationEntry = panelStore.get(moderationKey);
@@ -687,6 +732,23 @@ async function handleHomeInteraction({ interaction, config, client, logger, home
                 guildOptions: available
             });
             panelStore.set(homeKey, { message, guildOptions, view: 'module', module: 'moderation' });
+            return;
+        }
+
+        if (target === 'spotlight') {
+            const available = spotlightSetup.collectEligibleGuildIds(config);
+            const initialId = available[0] ?? null;
+            const guild = initialId ? await fetchGuild(client, initialId) : null;
+            const view = await spotlightSetup.buildView({ config, client, guildId: initialId, guild, mode: 'default', availableGuildIds: available });
+            const message = await interaction.update({ embeds: view.embeds, components: view.components });
+            panelStore.set(moduleKey, {
+                message,
+                guildId: view.activeGuildId ?? initialId ?? null,
+                mode: view.mode ?? 'default',
+                context: {},
+                availableGuildIds: available
+            });
+            panelStore.set(homeKey, { message, guildOptions, view: 'module', module: 'spotlight' });
             return;
         }
 
