@@ -6,6 +6,7 @@ import { loadConfig } from './core/config.js';
 import { createLogger } from './core/logger.js';
 import { createDb } from './core/db.js';
 import { loadFeatures } from './core/loader.js';
+import { startInternalApi } from '../mcp/internal-api.mjs'; // MCP bridge (localhost) — starts when client is ready
 
 const config = loadConfig();               // reads ./config.json
 const logger = createLogger(config.debugLevel || 'info');
@@ -19,6 +20,20 @@ await loadFeatures({
     logger,
     db
 });
+
+// ————— Start localhost-only MCP control API as soon as the client is usable —————
+const bootInternalApi = () => {
+    try {
+        startInternalApi({ client, logger });
+    } catch (e) {
+        logger.error(`[internal-api] failed to start: ${e?.message ?? e}`);
+    }
+};
+if (typeof client.isReady === 'function' && client.isReady()) {
+    bootInternalApi();
+} else {
+    client.once('ready', bootInternalApi);
+}
 
 const SHUTDOWN_EMOJI = '❎';
 let shuttingDown = false;
