@@ -300,61 +300,11 @@ export function normalizeRainbowBridgeConfig(value) {
         const channels = Object.values(forms)
             .map(normalizeChannelEntry)
             .filter(Boolean);
-
-        const directionRaw = typeof rawEntry.direction === 'string'
-            ? rawEntry.direction.toLowerCase()
-            : null;
-        const modeRaw = typeof rawEntry.mode === 'string'
-            ? rawEntry.mode.toLowerCase()
-            : null;
-        const oneWay = rawEntry.oneWay === true;
-        let direction = directionRaw === 'one-way'
-            || modeRaw === 'one-way'
-            || oneWay
-            ? 'one-way'
-            : 'two-way';
-
-        const sourceGuildCandidates = new Set();
-        const rawSourceLists = [rawEntry.sourceGuildIds, rawEntry.originGuildIds];
-        for (const list of rawSourceLists) {
-            if (!Array.isArray(list)) continue;
-            for (const guildId of list) {
-                if (!guildId) continue;
-                sourceGuildCandidates.add(String(guildId));
-            }
-        }
-        const singularSources = [
-            rawEntry.sourceGuildId,
-            rawEntry.originGuildId,
-            rawEntry.primaryGuildId
-        ];
-        for (const guildId of singularSources) {
-            if (!guildId) continue;
-            sourceGuildCandidates.add(String(guildId));
-        }
-
-        const availableGuildIds = channels
-            .map((channel) => channel?.guildId ? String(channel.guildId) : null)
-            .filter(Boolean);
-
-        let sourceGuildIds = [...sourceGuildCandidates].filter((guildId) => availableGuildIds.includes(guildId));
-        if (direction === 'one-way' && !sourceGuildIds.length && availableGuildIds.length) {
-            sourceGuildIds = [availableGuildIds[0]];
-        }
-        if (direction === 'one-way' && !availableGuildIds.length) {
-            direction = 'two-way';
-        }
-        if (direction === 'one-way' && !sourceGuildIds.length) {
-            direction = 'two-way';
-        }
-
         const entry = {
             name: rawEntry.name ? String(rawEntry.name) : String(bridgeId),
             forwardBots: rawEntry.forwardBots === undefined ? undefined : rawEntry.forwardBots !== false,
             forms,
-            channels,
-            direction,
-            sourceGuildIds
+            channels
         };
         bridges[String(bridgeId)] = entry;
     }
@@ -601,25 +551,14 @@ function rebuildState() {
     for (const [bridgeId, entry] of Object.entries(base.bridges ?? {})) {
         if (!bridgeId || !entry || typeof entry !== 'object') continue;
 
-        let direction = entry.direction === 'one-way' ? 'one-way' : 'two-way';
-        const sourceGuildSet = new Set(
-            Array.isArray(entry.sourceGuildIds)
-                ? entry.sourceGuildIds.map((value) => value ? String(value) : null).filter(Boolean)
-                : []
-        );
-
         const normalized = {
             id: bridgeId,
             name: entry.name ?? bridgeId,
             forwardBots: entry.forwardBots === undefined
                 ? base.forwardBots
                 : entry.forwardBots,
-            channels: [],
-            direction,
-            sourceGuildIds: sourceGuildSet
+            channels: []
         };
-
-        const pendingChannels = [];
 
         for (const channelEntry of entry.channels ?? []) {
             const parsed = parseWebhookUrl(channelEntry.webhookUrl);
@@ -633,7 +572,7 @@ function rebuildState() {
             if (channelEntry.threadId) matchIds.add(channelEntry.threadId);
             if (channelEntry.parentId) matchIds.add(channelEntry.parentId);
 
-            pendingChannels.push({
+            normalized.channels.push({
                 guildId: channelEntry.guildId,
                 channelId: channelEntry.channelId,
                 webhookUrl: channelEntry.webhookUrl,
@@ -647,25 +586,6 @@ function rebuildState() {
 
             knownWebhookIds.add(parsed.id);
             validWebhookKeys.add(`${parsed.id}:${parsed.token}`);
-        }
-
-        const availableGuilds = new Set(pendingChannels.map((channel) => channel.guildId).filter(Boolean));
-        for (const guildId of Array.from(sourceGuildSet)) {
-            if (!availableGuilds.has(guildId)) {
-                sourceGuildSet.delete(guildId);
-            }
-        }
-        if (direction === 'one-way' && (!availableGuilds.size || !sourceGuildSet.size)) {
-            direction = 'two-way';
-            normalized.direction = direction;
-        }
-
-        for (const channel of pendingChannels) {
-            const allowOutbound = direction !== 'one-way' || sourceGuildSet.has(channel.guildId);
-            normalized.channels.push({
-                ...channel,
-                allowOutbound
-            });
         }
 
         if (normalized.channels.length >= 2) {
@@ -1416,11 +1336,6 @@ export async function init({ client, config, logger, db }) {
                     }
 
                     targetEntries.push({ target: channelEntry, isLocal: matchesOrigin });
-                }
-
-                const canMirrorFromHere = targetEntries.some((entry) => entry.isLocal && entry.target.allowOutbound !== false);
-                if (!canMirrorFromHere) {
-                    continue;
                 }
 
                 const remoteTargets = targetEntries.filter((entry) => !entry.isLocal);

@@ -57,22 +57,6 @@ export function pruneBridgeChannels(bridge, selections) {
 
     const after = Array.isArray(bridge.channels) ? bridge.channels.length : 0;
     const removed = before - after;
-
-    const remainingGuildIds = new Set(
-        (Array.isArray(bridge.channels) ? bridge.channels : [])
-            .map((channel) => channel?.guildId ? String(channel.guildId) : null)
-            .filter(Boolean)
-    );
-    if (Array.isArray(bridge.sourceGuildIds)) {
-        bridge.sourceGuildIds = bridge.sourceGuildIds
-            .map((guildId) => guildId ? String(guildId) : null)
-            .filter((guildId) => guildId && remainingGuildIds.has(guildId));
-    }
-    if (bridge.direction === 'one-way' && (!Array.isArray(bridge.sourceGuildIds) || !bridge.sourceGuildIds.length)) {
-        bridge.direction = 'two-way';
-        delete bridge.sourceGuildIds;
-    }
-
     return { removed: removed > 0 ? removed : 0 };
 }
 

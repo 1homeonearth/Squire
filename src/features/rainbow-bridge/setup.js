@@ -163,67 +163,6 @@ export function createRainbowBridgeSetup({ panelStore, saveConfig, fetchGuild, c
                     }).catch(() => {});
                     return;
                 }
-                case 'toggleDirection': {
-                    if (!bridgeId || !bridges[bridgeId]) {
-                        await interaction.reply({ content: 'That bridge no longer exists.', ephemeral: true });
-                        return;
-                    }
-                    const bridge = bridges[bridgeId];
-                    const current = bridge.direction === 'one-way' ? 'one-way' : 'two-way';
-                    if (current === 'one-way') {
-                        bridge.direction = 'two-way';
-                        delete bridge.sourceGuildIds;
-                    } else {
-                        bridge.direction = 'one-way';
-                        const availableGuildIds = new Set(
-                            (bridge.channels ?? [])
-                                .map((channel) => channel?.guildId ? String(channel.guildId) : null)
-                                .filter(Boolean)
-                        );
-                        const existingSources = new Set(
-                            Array.isArray(bridge.sourceGuildIds)
-                                ? bridge.sourceGuildIds.map((value) => value ? String(value) : null).filter(Boolean)
-                                : []
-                        );
-                        const normalizedSources = [...existingSources].filter((id) => availableGuildIds.has(id));
-                        if (!normalizedSources.length && availableGuildIds.size) {
-                            normalizedSources.push(Array.from(availableGuildIds)[0]);
-                        }
-                        bridge.sourceGuildIds = normalizedSources;
-                        if (!bridge.sourceGuildIds.length) {
-                            bridge.direction = 'two-way';
-                        }
-                    }
-
-                    config.rainbowBridge = normalizeRainbowBridgeConfig(config.rainbowBridge);
-                    const normalizedBridge = config.rainbowBridge?.bridges?.[bridgeId] ?? null;
-                    const direction = normalizedBridge?.direction === 'one-way' ? 'one-way' : 'two-way';
-                    refreshRainbowBridge();
-                    saveConfig(config, logger);
-                    const nextContext = direction === 'one-way'
-                        ? { bridgeId, action: 'edit-sources' }
-                        : { bridgeId };
-                    await updateView('manage', nextContext);
-                    const response = direction === 'one-way'
-                        ? 'Bridge is now in one-way mode. Select the source servers to control which guilds broadcast out.'
-                        : 'Bridge is now in two-way mode. Messages will sync across every linked server.';
-                    await interaction.followUp({ content: response, ephemeral: true }).catch(() => {});
-                    return;
-                }
-                case 'editSources': {
-                    if (!bridgeId || !bridges[bridgeId]) {
-                        await interaction.reply({ content: 'That bridge no longer exists.', ephemeral: true });
-                        return;
-                    }
-                    const bridge = bridges[bridgeId];
-                    const direction = bridge.direction === 'one-way' ? 'one-way' : 'two-way';
-                    if (direction !== 'one-way') {
-                        await interaction.reply({ content: 'Switch the bridge to one-way mode before choosing source servers.', ephemeral: true });
-                        return;
-                    }
-                    await updateView('manage', { bridgeId, action: 'edit-sources' });
-                    return;
-                }
                 case 'deleteBridge': {
                     if (!bridgeId || !bridges[bridgeId]) {
                         await interaction.reply({ content: 'That bridge no longer exists.', ephemeral: true });
@@ -305,52 +244,6 @@ export function createRainbowBridgeSetup({ panelStore, saveConfig, fetchGuild, c
                     content: removed
                         ? `Removed ${removed} channel${removed === 1 ? '' : 's'} from the bridge.`
                         : 'No matching channels were removed.',
-                    ephemeral: true
-                }).catch(() => {});
-                return;
-            }
-
-            if (interaction.customId.startsWith('setup:rainbow:editSourcesSelect:')) {
-                const parts = interaction.customId.split(':');
-                const bridgeId = parts[3] || null;
-                if (!bridgeId || !bridges[bridgeId]) {
-                    await interaction.deferUpdate().catch(() => {});
-                    await interaction.followUp({ content: 'That bridge no longer exists.', ephemeral: true }).catch(() => {});
-                    return;
-                }
-
-                const selections = Array.from(new Set(interaction.values ?? [])).filter(Boolean);
-                if (!selections.length) {
-                    await interaction.deferUpdate().catch(() => {});
-                    await interaction.followUp({ content: 'Select at least one source server.', ephemeral: true }).catch(() => {});
-                    return;
-                }
-
-                const bridge = bridges[bridgeId];
-                const availableGuildIds = new Set(
-                    (bridge.channels ?? [])
-                        .map((channel) => channel?.guildId ? String(channel.guildId) : null)
-                        .filter(Boolean)
-                );
-                const chosen = selections.filter((guildId) => availableGuildIds.has(guildId));
-                if (!chosen.length) {
-                    await interaction.deferUpdate().catch(() => {});
-                    await interaction.followUp({ content: 'Those servers are no longer linked to the bridge.', ephemeral: true }).catch(() => {});
-                    return;
-                }
-
-                bridge.sourceGuildIds = chosen;
-                bridge.direction = 'one-way';
-
-                config.rainbowBridge = normalizeRainbowBridgeConfig(config.rainbowBridge);
-                refreshRainbowBridge();
-                saveConfig(config, logger);
-                await updateView('manage', { bridgeId });
-
-                const labelMap = new Map((guildOptions ?? []).map((option) => [String(option.id), option.name]));
-                const summary = chosen.map((guildId) => labelMap.get(guildId) ?? guildId).join(', ');
-                await interaction.followUp({
-                    content: `One-way bridge will now mirror messages from: ${summary}.`,
                     ephemeral: true
                 }).catch(() => {});
                 return;
@@ -480,7 +373,6 @@ export function createRainbowBridgeSetup({ panelStore, saveConfig, fetchGuild, c
     }
 
     async function buildView({ config, client, guildOptions: _guildOptions, mode, context }) {
-        const guildOptions = Array.isArray(_guildOptions) ? _guildOptions : [];
         const embed = new EmbedBuilder()
         .setTitle('🌈 Rainbow Bridge setup')
         .setDescription('Synchronize messages, edits, and deletions across channels in different servers.');
@@ -548,66 +440,41 @@ export function createRainbowBridgeSetup({ panelStore, saveConfig, fetchGuild, c
 
             const inherited = config.rainbowBridge.forwardBots !== false;
             const bots = bridge.forwardBots === undefined ? inherited : bridge.forwardBots;
-            const direction = bridge.direction === 'one-way' ? 'one-way' : 'two-way';
-            const sourceGuildIds = Array.isArray(bridge.sourceGuildIds)
-                ? bridge.sourceGuildIds.map((value) => value ? String(value) : null).filter(Boolean)
-                : [];
-            const sourceGuildSet = new Set(sourceGuildIds);
 
             embed
             .setTitle(`🌈 Bridge: ${bridge.name ?? bridgeId}`)
             .addFields(
                 { name: 'Bridge ID', value: `\`${bridgeId}\``, inline: true },
-                { name: 'Bot messages', value: bots ? '✅ Mirrored' : '🚫 Ignored', inline: true },
-                {
-                    name: 'Direction',
-                    value: direction === 'one-way'
-                        ? '➡️ One-way — receiving servers keep their own messages.'
-                        : '🔁 Two-way — every linked server mirrors activity.',
-                    inline: true
-                }
+                { name: 'Bot messages', value: bots ? '✅ Mirrored' : '🚫 Ignored', inline: true }
             );
 
             const channelLines = [];
             const channelOptions = [];
             const guildCache = new Map();
-            const uniqueGuildIds = new Set();
-            const sourceNameMap = new Map();
             for (const link of bridge.channels ?? []) {
-                const guildKey = link.guildId ? String(link.guildId) : null;
-                if (guildKey && !guildCache.has(guildKey)) {
-                    const fetched = await fetchGuild(client, guildKey);
-                    guildCache.set(guildKey, fetched);
+                if (!guildCache.has(link.guildId)) {
+                    const fetched = await fetchGuild(client, link.guildId);
+                    guildCache.set(link.guildId, fetched);
                 }
-                const guild = guildKey ? guildCache.get(guildKey) : null;
-                const guildName = guild?.name ?? guildKey ?? 'Unknown guild';
-                if (guildKey) {
-                    uniqueGuildIds.add(guildKey);
-                }
+                const guild = guildCache.get(link.guildId);
+                const guildName = guild?.name ?? link.guildId;
                 let channelDisplay = `<#${link.channelId}>`;
                 const channel = guild?.channels?.cache?.get(link.channelId) ?? null;
                 if (channel?.isTextBased?.()) {
                     channelDisplay = `<#${channel.id}>`;
                 }
-                const isSourceGuild = direction === 'one-way' && guildKey && sourceGuildSet.has(guildKey);
-                if (isSourceGuild && guildKey && !sourceNameMap.has(guildKey)) {
-                    sourceNameMap.set(guildKey, guildName);
-                }
-                const sourceBadge = isSourceGuild ? ' — **source**' : '';
-                channelLines.push(`• ${guildName} — ${channelDisplay}${sourceBadge}`);
+                channelLines.push(`• ${guildName} — ${channelDisplay}`);
 
                 const optionLabel = truncateName(guildName, 75);
                 const optionDescription = truncateName(
                     channel?.isTextBased?.() ? `#${channel.name}` : `Channel ${link.channelId}`,
                     95
                 );
-                if (guildKey) {
-                    channelOptions.push({
-                        label: optionLabel,
-                        description: optionDescription,
-                        value: `${guildKey}:${link.channelId}`
-                    });
-                }
+                channelOptions.push({
+                    label: optionLabel,
+                    description: optionDescription,
+                    value: `${link.guildId}:${link.channelId}`
+                });
             }
 
             embed.addFields({
@@ -617,20 +484,6 @@ export function createRainbowBridgeSetup({ panelStore, saveConfig, fetchGuild, c
                     : 'No channels linked yet. Add at least two channels to activate syncing.',
                 inline: false
             });
-
-            if (direction === 'one-way') {
-                const sourceList = [...sourceGuildSet];
-                const sourceLines = sourceList.map((guildId) => {
-                    const cachedName = sourceNameMap.get(guildId)
-                        ?? guildOptions.find((option) => String(option.id) === guildId)?.name
-                        ?? guildId;
-                    return `• ${truncateName(cachedName, 80)}`;
-                });
-                const sourceValue = sourceLines.length
-                    ? sourceLines.join('\n').slice(0, 1024)
-                    : 'Select at least one source server so outbound messages know where to originate.';
-                embed.addFields({ name: 'Source servers', value: sourceValue, inline: false });
-            }
 
             if ((bridge.channels?.length ?? 0) < 2) {
                 embed.addFields({ name: 'Status', value: 'Add at least two channels so messages can be mirrored between them.', inline: false });
@@ -642,12 +495,6 @@ export function createRainbowBridgeSetup({ panelStore, saveConfig, fetchGuild, c
                 embed.setFooter({ text: channelOptions.length ? 'Pick channels from the dropdown to unlink them from this bridge.' : 'No channels left to remove from this bridge.' });
             } else if (context?.action === 'confirm-delete') {
                 embed.setFooter({ text: 'This action cannot be undone. Confirm to delete the bridge.' });
-            } else if (context?.action === 'edit-sources') {
-                embed.setFooter({
-                    text: direction === 'one-way'
-                        ? 'Choose which servers should broadcast messages across the bridge.'
-                        : 'Switch to one-way mode to choose source servers.'
-                });
             }
 
             const actionsRow = new ActionRowBuilder().addComponents(
@@ -658,18 +505,6 @@ export function createRainbowBridgeSetup({ panelStore, saveConfig, fetchGuild, c
             );
 
             components.push(actionsRow);
-            const directionRow = new ActionRowBuilder().addComponents(
-                new ButtonBuilder()
-                .setCustomId(`setup:rainbow:toggleDirection:${bridgeId}`)
-                .setLabel(direction === 'one-way' ? 'Switch to two-way' : 'Switch to one-way')
-                .setStyle(ButtonStyle.Secondary),
-                new ButtonBuilder()
-                .setCustomId(`setup:rainbow:editSources:${bridgeId}`)
-                .setLabel('Edit source servers')
-                .setStyle(ButtonStyle.Secondary)
-                .setDisabled(direction !== 'one-way' || (bridge.channels?.length ?? 0) < 2)
-            );
-            components.push(directionRow);
             components.push(new ActionRowBuilder().addComponents(
                 new ButtonBuilder().setCustomId('setup:rainbow:backToList').setLabel('Back to bridges').setStyle(ButtonStyle.Secondary)
             ));
@@ -682,32 +517,6 @@ export function createRainbowBridgeSetup({ panelStore, saveConfig, fetchGuild, c
                 .setMaxValues(Math.min(channelOptions.length, 25))
                 .addOptions(channelOptions.slice(0, 25));
                 components.push(new ActionRowBuilder().addComponents(removeSelect));
-            }
-
-            if (context?.action === 'edit-sources' && direction === 'one-way') {
-                const guildOptionEntries = Array.from(uniqueGuildIds)
-                    .filter(Boolean)
-                    .map((guildId) => {
-                        const guild = guildCache.get(guildId);
-                        const name = guild?.name
-                            ?? guildOptions.find((option) => String(option.id) === guildId)?.name
-                            ?? guildId;
-                        return {
-                            label: truncateName(name, 75),
-                            value: String(guildId),
-                            description: truncateName(name, 95),
-                            default: sourceGuildSet.has(String(guildId))
-                        };
-                    });
-                if (guildOptionEntries.length) {
-                    const sourceSelect = new StringSelectMenuBuilder()
-                    .setCustomId(`setup:rainbow:editSourcesSelect:${bridgeId}`)
-                    .setPlaceholder('Select source servers')
-                    .setMinValues(1)
-                    .setMaxValues(Math.min(guildOptionEntries.length, 25))
-                    .addOptions(guildOptionEntries.slice(0, 25));
-                    components.push(new ActionRowBuilder().addComponents(sourceSelect));
-                }
             }
 
             if (context?.action === 'confirm-delete') {
