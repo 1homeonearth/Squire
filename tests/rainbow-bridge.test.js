@@ -81,8 +81,6 @@ describe('normalizeRainbowBridgeConfig', () => {
         expect(config.forwardBots).toBe(false);
         const bridge = config.bridges.alpha;
         expect(bridge.name).toBe('Alpha');
-        expect(bridge.direction).toBe('two-way');
-        expect(bridge.sourceGuildIds).toEqual([]);
         expect(bridge.forms['123']).toEqual({
             guildId: '123',
             channelId: '456',
@@ -139,28 +137,6 @@ describe('normalizeRainbowBridgeConfig', () => {
             guildId: '789',
             channelId: '101'
         });
-        expect(bridge.direction).toBe('two-way');
-        expect(bridge.sourceGuildIds).toEqual([]);
-    });
-
-    it('normalizes one-way bridges and filters unavailable source guilds', () => {
-        const config = normalizeRainbowBridgeConfig({
-            bridges: {
-                gamma: {
-                    name: 'Gamma',
-                    direction: 'one-way',
-                    sourceGuildIds: ['123', '999'],
-                    forms: {
-                        '123': { guildId: '123', channelId: '456', webhookUrl: 'https://discord.com/api/webhooks/111/tokenA' },
-                        '456': { guildId: '456', channelId: '789', webhookUrl: 'https://discord.com/api/webhooks/222/tokenB' }
-                    }
-                }
-            }
-        });
-
-        const bridge = config.bridges.gamma;
-        expect(bridge.direction).toBe('one-way');
-        expect(bridge.sourceGuildIds).toEqual(['123']);
     });
 });
 
@@ -174,9 +150,7 @@ describe('pruneBridgeChannels', () => {
             forms: {
                 '123': { guildId: '123', channelId: '456', webhookUrl: 'https://discord.com/api/webhooks/111/tokenA' },
                 '789': { guildId: '789', channelId: '000', webhookUrl: 'https://discord.com/api/webhooks/222/tokenB' }
-            },
-            direction: 'one-way',
-            sourceGuildIds: ['123', '789']
+            }
         };
 
         const result = pruneBridgeChannels(bridge, new Set(['123:456']));
@@ -187,8 +161,6 @@ describe('pruneBridgeChannels', () => {
         ]);
         expect(bridge.forms['123']).toBeUndefined();
         expect(bridge.forms['789']).toBeDefined();
-        expect(bridge.direction).toBe('one-way');
-        expect(bridge.sourceGuildIds).toEqual(['789']);
     });
 
     it('keeps bridge state intact when nothing matches', () => {
@@ -198,9 +170,7 @@ describe('pruneBridgeChannels', () => {
             ],
             forms: {
                 '123': { guildId: '123', channelId: '456', webhookUrl: 'https://discord.com/api/webhooks/111/tokenA' }
-            },
-            direction: 'one-way',
-            sourceGuildIds: ['123']
+            }
         };
 
         const result = pruneBridgeChannels(bridge, new Set(['999:000']));
@@ -210,8 +180,6 @@ describe('pruneBridgeChannels', () => {
             { guildId: '123', channelId: '456', webhookUrl: 'https://discord.com/api/webhooks/111/tokenA' }
         ]);
         expect(bridge.forms['123']).toBeDefined();
-        expect(bridge.direction).toBe('one-way');
-        expect(bridge.sourceGuildIds).toEqual(['123']);
     });
 });
 
@@ -360,37 +328,6 @@ describe('rainbow bridge refresh hook', () => {
         const localCallOrder = localWebhook.send.mock.invocationCallOrder?.[0] ?? Number.POSITIVE_INFINITY;
         expect(deleteCallOrder).toBeLessThan(remoteCallOrder);
         expect(deleteCallOrder).toBeLessThan(localCallOrder);
-    });
-
-    it('skips mirroring messages from receiving servers when bridge is one-way', async () => {
-        config.rainbowBridge.bridges.test = {
-            name: 'Directional Bridge',
-            direction: 'one-way',
-            sourceGuildIds: ['guild-1'],
-            channels: [
-                { guildId: 'guild-1', channelId: 'chan-a', webhookUrl: 'https://discord.com/api/webhooks/111/tokenA' },
-                { guildId: 'guild-2', channelId: 'chan-b', webhookUrl: 'https://discord.com/api/webhooks/222/tokenB' }
-            ]
-        };
-        config.rainbowBridge = normalizeRainbowBridgeConfig(config.rainbowBridge);
-        refresh();
-
-        const outbound = makeMessage({ id: 'source-msg', guildId: 'guild-1', channelId: 'chan-a', content: 'from source' });
-        outbound.delete = vi.fn(async () => {});
-        await emit('messageCreate', outbound);
-
-        const remoteWebhook = WebhookClient.instances.find((instance) => instance.id === '222');
-        const localWebhook = WebhookClient.instances.find((instance) => instance.id === '111');
-        expect(remoteWebhook?.send).toHaveBeenCalledTimes(1);
-        expect(localWebhook?.send).toHaveBeenCalledTimes(1);
-
-        const inbound = makeMessage({ id: 'receiving-msg', guildId: 'guild-2', channelId: 'chan-b', content: 'from receiver' });
-        inbound.delete = vi.fn(async () => {});
-        await emit('messageCreate', inbound);
-
-        expect(remoteWebhook?.send).toHaveBeenCalledTimes(1);
-        expect(localWebhook?.send).toHaveBeenCalledTimes(1);
-        expect(inbound.delete).not.toHaveBeenCalled();
     });
 
     it('includes reaction summaries and syncs edits when reactions change', async () => {
