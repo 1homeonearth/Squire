@@ -731,7 +731,7 @@ Every change is persisted to `config.json`, so redeploys and restarts keep the c
 | `EXCLUDE_CHANNELS_JSON` | JSON object overriding `config.excludeChannels`. |
 | `EXCLUDE_CATEGORIES_JSON` | JSON object overriding `config.excludeCategories`. |
 | `RAINBOW_BRIDGE_BRIDGES_JSON` | JSON object overriding `config.rainbowBridge.bridges`. |
-| `MAIN_SERVER_IDS_JSON` | Overrides `config.mainServerIds`. Accepts a JSON array or a comma/space separated list of guild IDs. |
+| `MAIN_SERVER_IDS_JSON` | JSON array overriding `config.mainServerIds`. |
 | `WELCOME_CONFIG_JSON` | JSON object overriding `config.welcome`. |
 | `AUTOBAN_NOTIFY_CHANNEL_ID` | Channel ID string overriding `config.autoban.notifyChannelId`. |
 | `AUTOBAN_CONFIG_JSON` | JSON object overriding the entire `config.autoban` block. |
