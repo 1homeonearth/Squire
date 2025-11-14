@@ -10,86 +10,6 @@ function safeJSON(str, fallback) {
     try { return JSON.parse(str); } catch { return fallback; }
 }
 
-function sanitizeSnowflakeList(list) {
-    if (!Array.isArray(list)) return [];
-    const out = [];
-    const seen = new Set();
-    for (const value of list) {
-        const str = String(value ?? '').trim();
-        if (!/^\d{15,25}$/.test(str)) continue;
-        if (seen.has(str)) continue;
-        seen.add(str);
-        out.push(str);
-    }
-    return out;
-}
-
-function coerceSnowflakeArray(value) {
-    if (value === undefined || value === null) {
-        return { success: false, value: [] };
-    }
-
-    if (Array.isArray(value)) {
-        return { success: true, value: sanitizeSnowflakeList(value) };
-    }
-
-    if (typeof value === 'number' && Number.isFinite(value)) {
-        return { success: true, value: sanitizeSnowflakeList([String(Math.trunc(value))]) };
-    }
-
-    if (typeof value === 'string') {
-        const trimmed = value.trim();
-        if (!trimmed) {
-            return { success: true, value: [] };
-        }
-
-        const plainMatch = /^[\d\s,]+$/.test(trimmed);
-        if (plainMatch) {
-            const pieces = trimmed.split(/[\s,]+/).filter(Boolean);
-            const sanitisedPlain = sanitizeSnowflakeList(pieces);
-            if (sanitisedPlain.length) {
-                return { success: true, value: sanitisedPlain };
-            }
-            if (!pieces.length) {
-                return { success: true, value: [] };
-            }
-        }
-
-        const maybeJSON = safeJSON(trimmed, null);
-        if (Array.isArray(maybeJSON)) {
-            return { success: true, value: sanitizeSnowflakeList(maybeJSON) };
-        }
-
-        if (typeof maybeJSON === 'number' && Number.isFinite(maybeJSON)) {
-            return { success: true, value: sanitizeSnowflakeList([String(Math.trunc(maybeJSON))]) };
-        }
-
-        if (typeof maybeJSON === 'string') {
-            return { success: true, value: sanitizeSnowflakeList([maybeJSON]) };
-        }
-
-        const pieces = plainMatch ? [] : trimmed.split(/[\s,]+/).filter(Boolean);
-        const sanitised = sanitizeSnowflakeList(pieces);
-        if (sanitised.length) {
-            return { success: true, value: sanitised };
-        }
-
-        return { success: false, value: [] };
-    }
-
-    return { success: false, value: [] };
-}
-
-function normalizeMainServerIds(primary, fallback) {
-    const first = coerceSnowflakeArray(primary);
-    if (first.success) return first.value;
-
-    const second = coerceSnowflakeArray(fallback);
-    if (second.success) return second.value;
-
-    return [];
-}
-
 export function loadConfig() {
     let fileCfg = {};
     if (fs.existsSync(CONFIG_PATH)) {
@@ -122,9 +42,7 @@ export function loadConfig() {
         base.bridges = safeJSON(process.env.RAINBOW_BRIDGE_BRIDGES_JSON, base.bridges);
         over.rainbowBridge = base;
     }
-    if (process.env.MAIN_SERVER_IDS_JSON !== undefined) {
-        over.mainServerIds = process.env.MAIN_SERVER_IDS_JSON;
-    }
+    if (process.env.MAIN_SERVER_IDS_JSON) over.mainServerIds = safeJSON(process.env.MAIN_SERVER_IDS_JSON, fileCfg.mainServerIds);
     if (process.env.WELCOME_CONFIG_JSON)  over.welcome = safeJSON(process.env.WELCOME_CONFIG_JSON, fileCfg.welcome);
     if (process.env.AUTOBAN_CONFIG_JSON)  over.autoban = safeJSON(process.env.AUTOBAN_CONFIG_JSON, fileCfg.autoban);
     if (process.env.AUTOBAN_NOTIFY_CHANNEL_ID) {
@@ -200,7 +118,9 @@ export function loadConfig() {
         delete over.autoban.notifyChannelId;
     }
 
-    over.mainServerIds = normalizeMainServerIds(over.mainServerIds, fileCfg.mainServerIds);
+    if (typeof over.mainServerIds === 'string') {
+        over.mainServerIds = safeJSON(over.mainServerIds, []);
+    }
 
     if (typeof over.welcome === 'string') {
         over.welcome = safeJSON(over.welcome, {});
