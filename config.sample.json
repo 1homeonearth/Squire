@@ -1,103 +1,11 @@
 {
-  "token": "$ENV{DISCORD_TOKEN}",
-  "applicationId": "$ENV{APPLICATION_ID}",
-  "devGuildId": null,
-  "dbPath": "./squire.db.json",
-  "sampleRate": 1.0,
-  "forwardBots": true,
-  "debugLevel": "info",
-  "loggingServerId": "$ENV{LOGGING_SERVER_ID}",
-  "featureOrder": [
-    "setup",
-    "auto-bouncer",
-    "moderation-commands",
-    "moderation-logging",
-    "logging-forwarder",
-    "rainbow-bridge",
-    "welcome-cards",
-    "experience",
-    "spotlight-gallery",
-    "playlists"
-  ],
-  "mapping": "$ENV{MAPPING_JSON}",
-  "loggingChannels": "$ENV{LOGGING_CHANNELS_JSON}",
-  "moderationLogging": "$ENV{MODERATION_LOGGING_JSON}",
-  "loggingWebhookMeta": {},
-  "excludeChannels": "$ENV{EXCLUDE_CHANNELS_JSON}",
-  "excludeCategories": "$ENV{EXCLUDE_CATEGORIES_JSON}",
-  "rainbowBridge": {
-    "forwardBots": true,
-    "bridges": "$ENV{RAINBOW_BRIDGE_BRIDGES_JSON}"
-  },
-  "autoban": {
-    "enabled": true,
-    "blockedUsernames": ["mega", "megas", "link", "links"],
-    "notifyChannelId": "$ENV{AUTOBAN_NOTIFY_CHANNEL_ID}",
-    "notifyWebhookUrls": [
-      "$ENV{AUTOBAN_NOTIFY_WEBHOOK}"
-    ],
-    "testRoleMap": "$ENV{AUTOBAN_TEST_ROLE_MAP_JSON}",
-    "deleteMessageSeconds": 0,
-    "scanBio": true
-  },
-  "embedBuilder": {
-    "activeKey": "announcements",
-    "embeds": {
-      "announcements": {
-        "name": "Announcements",
-        "guildId": "",
-        "channelId": "",
-        "preface": "",
-        "embed": {
-          "color": "#5865F2",
-          "title": "",
-          "description": ""
-        },
-        "buttons": []
-      }
-    }
-  },
-  "experience": "$ENV{EXPERIENCE_CONFIG_JSON}",
-  "mainServerIds": "$ENV{MAIN_SERVER_IDS_JSON}",
-  "welcome": "$ENV{WELCOME_CONFIG_JSON}",
-  "playlists": {
-    "spotify": {
-      "clientId": "$ENV{SPOTIFY_CLIENT_ID}",
-      "clientSecret": "$ENV{SPOTIFY_CLIENT_SECRET}",
-      "refreshToken": "$ENV{SPOTIFY_REFRESH_TOKEN}",
-      "playlistId": "$ENV{SPOTIFY_PLAYLIST_ID}",
-      "skipDupes": "$ENV{PLAYLISTS_SKIP_DUPES}",
-      "guilds": {
-        "123456789012345678": {
-          "playlistId": "",
-          "name": ""
-        }
-      }
-    },
-    "youtube": {
-      "clientId": "$ENV{YT_CLIENT_ID}",
-      "clientSecret": "$ENV{YT_CLIENT_SECRET}",
-      "refreshToken": "$ENV{YT_REFRESH_TOKEN}",
-      "playlistId": "$ENV{YT_PLAYLIST_ID}",
-      "guilds": {
-        "123456789012345678": {
-          "playlistId": "",
-          "name": ""
-        }
-      }
-    }
-  },
-  "spotlightGallery": {
-    "123456789012345678": {
-      "enabled": false,
-      "channelId": "",
-      "threshold": 3,
-      "allowSelf": false,
-      "emojis": ["⭐"]
-    }
-  },
-  "moderationCommands": {
-    "roleMap": "$ENV{MODERATION_ROLE_MAP_JSON}"
+  "discord_token": "$ENV{DISCORD_TOKEN}",
+  "application_id": "$ENV{DISCORD_APPLICATION_ID}",
+  "public_key": "$ENV{DISCORD_PUBLIC_KEY}",
+  "database_path": "data/squire.db",
+  "feature_flags": {
+    "xp": true,
+    "moderation": true,
+    "logging": true
   }
 }
-
