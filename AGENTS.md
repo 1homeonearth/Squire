@@ -55,6 +55,12 @@ Do not use lint or vitest; instead, write hoenst, informative, and clear comment
 - Do not modify systemd units, EnvironmentFiles, firewall, or networking from CI.
 - In workflows, pin all third-party Actions to full commit SHAs and grant minimal permissions (e.g. `contents: read`).
 
+## IP logging
+- Keep the IP access log append-only in `security/ip-access-log.md` and never rewrite or redact prior entries.
+- Every log entry must remain signature-verifiable; encrypted entries still require a verifiable signing chain before they are trusted.
+- Encrypted, append-only entries are allowed when using shared decryption keys (for example, team-managed GPG public keys or age recipients) documented in `security/keys/README.md`.
+- Always accompany encrypted entries with the metadata needed to verify signatures once decrypted.
+
 ## Files & paths that matter
 - `config.sample.json` ; secrets referenced via `$ENV_VARS`. Modify to follow directive if need be and document when you do.
 
