@@ -70,6 +70,22 @@ cd Squire-main
   - Provides the `/setup` slash command that gives admins an in-Discord control panel for every module.
   - Manages logging destinations, welcome channel reminders, rainbow bridge links, autobouncer keywords, experience rules, and embed builder presets without editing `config.json` manually.
 
+## Exporting the Bard/Sentry bundle
+
+To offload Squire's logging, moderation logging, and spotlight gallery duties into a separate bot (Bard or Sentry), run the exporter:
+
+```bash
+node scripts/export-bard-modules.mjs
+```
+
+The script creates `exports/bard/` containing:
+
+- The three feature folders (`logging-forwarder`, `moderation-logging`, `spotlight-gallery`).
+- Shared support files (`src/lib/youtube.js`, `src/lib/poll-format.js`, `src/lib/display.js`, `src/core/db.js`) needed for those features to run independently.
+- A trimmed `exports/bard/config.json` that copies the relevant config keys (logging server/channels, mappings, exclusions, sampling, moderation logging destinations, and spotlight gallery settings) from your local `config.json` if present, otherwise from `config.sample.json`.
+
+You can drop the `exports/bard/` tree into the new bot as a starting point without hunting for scattered dependencies.
+
 ## Module setup integration
 
 The `/setup` command is orchestrated by `src/features/setup/index.js`. During `init` it instantiates the `createLoggingSetup`, `createWelcomeSetup`, `createRainbowBridgeSetup`, and `createAutobouncerSetup` factories (one per feature module) and hands them shared helpers such as `panelStore`, `saveConfig`, `fetchGuild`, and `collectManageableGuilds`. Each factory must return at least three functions:
