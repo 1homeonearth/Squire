@@ -1,7 +1,9 @@
 # TODO — ecosystem hub
 
 ## Notice: nested TODO files with pending notes
-- If bots or nested ecosystems are added under `ecosystem/Discovery/`, check their TODO files and list them here.
+- ecosystem/Discovery/squire/TODO.md: contains vault and slash-command notes for the reference bot.
+- ecosystem/Discovery/bard/TODO.md: contains logging-specialist feature reminders.
+- ecosystem/Discovery/sentry/TODO.md: contains safety and verification reminders for the omega toolchain.
 
 ## User requests deferred
 - None.

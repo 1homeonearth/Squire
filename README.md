@@ -1,4 +1,4 @@
-![Squire emblem](squire/assets/squire.png)
+![Squire emblem](ecosystem/Discovery/squire/assets/squire.png)
 
 ```
   _____                 _
@@ -11,13 +11,13 @@
 
 # Course on Robot Recourse — modular, auditable Discord bot ecosystem
 
-Bots live directly in the repository root beside the `ecosystem/` folder. Developers can run each bot on its own or move bots and even entire ecosystems into another bot or ecosystem. The layout is intentionally symmetrical: every bot and ecosystem carries a `Discovery/` directory where presence markers and message queues live so cross-communication never leaves Rust control.
+Bots now live inside `ecosystem/Discovery/` as submodules of the central hub. Developers can still move bots or nested ecosystems elsewhere if they want to isolate them further; the layout stays symmetrical because every bot and ecosystem carries a `Discovery/` directory where presence markers and message queues live so cross-communication never leaves Rust control.
 
 All code is fully in-repo: Python and Rust files only rely on the standard library or locally defined helpers, and any behavior that once depended on an import has been copied verbatim into this repository so beginners can audit everything without external downloads.
 
 ## Folder map (recursively composable)
-- `squire/`, `bard/`, `sentry/` — standalone bot folders. Drop any bot into an ecosystem’s `Discovery/` folder (or inside another bot) to enroll it; the Rust hub writes presence markers inside each `Discovery/` directory to signal when communication is allowed.
-- `ecosystem/` — central Rust hub with its own `Discovery/` folder. It scans sibling bots in the repo root and any nested entries inside `Discovery/` folders to cascade presence markers.
+- `ecosystem/` — central Rust hub with its own `Discovery/` folder. It scans nested entries inside `Discovery/` folders to cascade presence markers.
+- `ecosystem/Discovery/squire/`, `ecosystem/Discovery/bard/`, `ecosystem/Discovery/sentry/` — standalone bot folders now enrolled as submodules of the hub. Drop any bot or ecosystem into a `Discovery/` folder (or inside another bot) to move it; the Rust hub writes presence markers inside each `Discovery/` directory to signal when communication is allowed.
 - `assets/` — shared ASCII art (`squire_ascii.txt`) so the emblem stays reviewable without binary files.
 - `security/` — security notes and the append-only IP access log.
 
@@ -26,14 +26,14 @@ Every folder with code has an `AGENTS.md` for behavior rules and a `TODO.md` for
 ## Running and compiling (no external downloads)
 1. **Python path setup (per bot):** from repo root
    ```bash
-   export PYTHONPATH="$(pwd)/squire/python"
-   python squire/python/main.py
+   export PYTHONPATH="$(pwd)/ecosystem/Discovery/squire/python"
+   python ecosystem/Discovery/squire/python/main.py
    ```
-   Adjust the path if you run Bard or Sentry, or if you relocate a bot inside an ecosystem’s `Discovery/` folder.
+   Swap `squire` for `bard` or `sentry` as needed. If you relocate a bot into a different `Discovery/` folder, update the path accordingly.
 
 2. **Rust compilation (per bot):**
    ```bash
-   cd squire
+   cd ecosystem/Discovery/squire
    rustc rust/discord_gateway.rs -o target/discord_gateway
    rustc rust/setup_panel.rs -o target/setup_panel
    cd -
@@ -84,7 +84,7 @@ Every folder with code has an `AGENTS.md` for behavior rules and a `TODO.md` for
 - **Error handling:** `try/except` blocks catch errors; this code often uses explicit `if` checks to keep reasoning simple.
 
 ## Learning path in this repo
-Start with `squire/README.md` for the concrete bot. Read the comments in `squire/python/crypto/secrets.py` and `passwords.py` to see AEAD and scrypt. Then explore `squire/python/features/*.py` for feature modules. Finally, open the Rust gateways (`squire/rust/discord_gateway.rs` and `ecosystem/rust/central_comm.rs`) to see how cross-bot and Discord communication stay confined to Rust. Bots moved into an ecosystem keep the same internal paths relative to their folder.
+Start with `ecosystem/Discovery/squire/README.md` for the concrete bot. Read the comments in `ecosystem/Discovery/squire/python/crypto/secrets.py` and `ecosystem/Discovery/squire/python/crypto/passwords.py` to see AEAD and scrypt. Then explore `ecosystem/Discovery/squire/python/features/*.py` for feature modules. Finally, open the Rust gateways (`ecosystem/Discovery/squire/rust/discord_gateway.rs` and `ecosystem/rust/central_comm.rs`) to see how cross-bot and Discord communication stay confined to Rust. Bots moved into another ecosystem keep the same internal paths relative to their folder.
 
 ## Why keep `__init__.py` small?
 `python/__init__.py` files mark packages for Python’s import system. They carry short explanations for readers; removing them would break relative imports when reorganizing modules. Keeping them, even with only comments, preserves clarity across nested layouts.

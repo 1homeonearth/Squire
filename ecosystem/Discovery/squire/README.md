@@ -11,24 +11,25 @@
 
 # Squire bot — reference implementation
 
-This folder is a self-contained version of Squire. It includes Python logic, a Rust Discord gateway, a Rust setup panel, an AGENTS guide, a TODO list, and copied assets. Everything needed to understand or rebuild the bot lives here so you can compile and run it without touching sibling bots or parent ecosystems. Bots start in the repo root; move Squire into another entity’s `Discovery/` folder when you want the central hub to coordinate it.
+This folder is a self-contained version of Squire. It includes Python logic, a Rust Discord gateway, a Rust setup panel, an AGENTS guide, a TODO list, and copied assets. Everything needed to understand or rebuild the bot lives here so you can compile and run it without touching sibling bots or parent ecosystems. Squire now lives inside the ecosystem hub’s `Discovery/` directory so the central coordinator sees it immediately; you can still move the folder into another entity’s `Discovery/` directory if you want to nest it elsewhere.
 
 Every function used by Squire sits inside this folder with no outside dependencies beyond the Python and Rust standard libraries, so beginners can read every line without chasing imports elsewhere.
 
 ## Running Squire
 1. Set the Python path so imports resolve within this folder:
    ```bash
-   export PYTHONPATH="$(pwd)/squire/python"
-   python squire/python/main.py
+   cd ecosystem/Discovery/squire
+   export PYTHONPATH="$(pwd)/python"
+   python python/main.py
    ```
-   If Squire is placed inside an ecosystem, update the paths accordingly.
+   If you move Squire into a different `Discovery/` folder, update the paths accordingly.
 2. Compile the Rust helpers:
    ```bash
-   cd squire
- rustc rust/discord_gateway.rs -o target/discord_gateway
-  rustc rust/setup_panel.rs -o target/setup_panel
-  cd -
-  ```
+   cd ecosystem/Discovery/squire
+   rustc rust/discord_gateway.rs -o target/discord_gateway
+   rustc rust/setup_panel.rs -o target/setup_panel
+   cd -
+   ```
 3. Slash commands: the gateway’s `sync_slash_commands` runs during `flush()` to keep commands current. Swap the stub with a real Discord client while keeping tokens in environment variables.
 
 The Cargo workspace also exposes a placeholder binary named `squire-gateway` so offline builds have a target to stage:

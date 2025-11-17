@@ -1,6 +1,6 @@
 # Ecosystem hub
 
-This folder holds the Rust core that coordinates bots. It keeps all Discord and cross-bot communication in Rust while Python modules inside each bot stay offline. Bots start in the repo root; when you want the hub to manage them, place a bot or another ecosystem inside this folder’s `Discovery/` directory. The file-based handshake keeps everything auditable and prevents Python from opening sockets.
+This folder holds the Rust core that coordinates bots. It keeps all Discord and cross-bot communication in Rust while Python modules inside each bot stay offline. The main bots now live inside this folder’s `Discovery/` directory so the hub manages them by default. You can still place additional bots or ecosystems inside any `Discovery/` directory when you want to nest them further. The file-based handshake keeps everything auditable and prevents Python from opening sockets.
 
 ## What the hub does
 - Discovers entities by looking at sibling folders in the repo root and any entries inside `Discovery/` folders. An entity is any directory that contains its own `Discovery/` folder.
