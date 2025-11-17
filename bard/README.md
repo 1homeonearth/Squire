@@ -30,6 +30,12 @@ All helpers used by Bard live in this folder and rely only on the standard libra
    ```
 3. The Rust gateway checks `Discovery/ecosystem_presence.txt` before routing inter-bot messages. Replace the stub slash-command sync with a real client when you add Discord features.
 
+The Cargo workspace includes a placeholder binary named `bard-gateway` so offline builds have a staging target:
+```bash
+cargo build --offline --release -p bard-gateway
+```
+It writes `Discovery/gateway_queue.log` to show where the logging dispatcher will push events once the real gateway code is wired up.
+
 ## Feature tour
 - `python/features/logging_forwarder.py` captures server events and queues them for Rust to forward to a logging channel.
 - `python/features/welcome_card.py` builds friendly welcome payloads without network calls.

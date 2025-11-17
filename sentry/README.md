@@ -11,24 +11,39 @@
 
 # Sentry bot — safety-focused stub
 
-This folder mirrors Squire’s structure without features yet. Sentry will inherit moderation and safety duties later. Bots start at the repo root; move Sentry into another entity’s `Discovery/` folder when you want a hub to coordinate it. Keep explanations beginner-friendly.
+This folder now contains Sentry Omega, the Rust crate responsible for reproducible builds and verification across the ecosystem. Bots start at the repo root; move Sentry into another entity’s `Discovery/` folder when you want a hub to coordinate it. Keep explanations beginner-friendly.
 
-All of Sentry’s current scaffolding stays inside this folder and uses only standard-library capabilities so beginners can follow every line without external imports.
+All scaffolding here uses only standard-library capabilities so beginners can follow every line without external imports. The legacy Python and Rust stubs remain for reference, but the Cargo targets focus on Sentry Omega’s build and verification duties.
 
-## Running Sentry (stub)
-1. Set the Python path so imports resolve within this folder:
-   ```bash
-   export PYTHONPATH="$(pwd)/sentry/python"
-   python sentry/python/__init__.py
-   ```
-2. Compile the Rust helpers:
-   ```bash
-   cd sentry
-   rustc rust/discord_gateway.rs -o target/discord_gateway
-   rustc rust/setup_panel.rs -o target/setup_panel
-   cd -
-   ```
-3. The Rust gateway checks `Discovery/ecosystem_presence.txt` before routing inter-bot messages. Replace the stub slash-command sync with a real client when you add Discord features.
+## Sentry Omega runtime modes
+- **Blue (air-gapped builder):** compiles the workspace offline, writes manifests under `releases/`, and signs artifacts before exporting them.
+- **Yellow (ecosystem verifier):** runs beside the hub, verifies itself against the omega manifest, and checks all bots discovered under `ecosystem/Discovery/`.
+- **Red (independent verifier):** runs on a separate host, compares its own findings with Yellow’s signed summaries, and logs disagreements for follow-up.
+
+Wrapper binaries pin these defaults:
+- `sentry-omega` (defaults to yellow unless `--mode` overrides)
+- `sentry-yellow` (yellow by default)
+- `sentry-red` (red by default)
+- `sentry-blue` (blue, only compiled when the `blue` feature is enabled)
+
+## Building with Cargo
+The workspace is defined at the repository root. Build Sentry Omega offline with the vendored settings in `.cargo/config.toml`:
+```bash
+cargo build --offline --release -p sentry-omega
+```
+Enable the blue wrapper when you are on the air-gapped builder:
+```bash
+cargo build --offline --release -p sentry-omega --features blue --bin sentry-blue
+```
+The helper script `build_omega.sh` automates the full offline build, staging binaries under `build/bin/` and writing manifests to `releases/` based on `SENTRY_COUNT` in `.env`.
+
+## Operating the CLI
+All binaries forward to the same CLI. Common commands:
+- `sentry-omega build --bins-dir build/bin --releases-dir releases --release-id omega-dev`
+- `sentry-omega verify --bins-dir build/bin --manifest releases/omega-omega-dev/manifest.txt`
+- `sentry-omega daemon --bins-dir build/bin --manifest releases/omega-omega-dev/manifest.txt --interval-seconds 60`
+
+Outputs are JSON strings suitable for log collectors. Hashes use a deterministic placeholder until a vendored cryptographic hash is added; the manifest includes a detached-signature placeholder so YubiKey-backed signing can be performed on Sentry Blue.
 
 ## TODO usage
 See `TODO.md` for deferred work. Add user requests or agent suggestions there so future sessions stay aligned with the Creator’s instructions.

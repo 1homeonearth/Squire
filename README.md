@@ -45,9 +45,19 @@ Every folder with code has an `AGENTS.md` for behavior rules and a `TODO.md` for
    cd -
    ```
 
-3. **Slash-command sync:** each Rust gateway exposes a `sync_slash_commands` stub during `flush()` to remind operators to register slash commands. Replace the stub with a real Discord HTTP client while keeping tokens in environment variables so Python never touches the network.
+3. **Cargo workspace targets:** the repository now exposes a Rust workspace so offline builds have consistent binaries to stage. Build the placeholder gateways and Sentry Omega without network access:
+   ```bash
+   cargo build --offline --workspace --release
+   ```
+   Enable the `blue` feature when compiling on the air-gapped builder to include the `sentry-blue` wrapper:
+   ```bash
+   cargo build --offline --workspace --release --features blue -p sentry-omega --bin sentry-blue
+   ```
+   The helper script `build_omega.sh` enforces the offline workflow: it checks `.env` against `.env.sample`, stages bots into `build/stage/`, runs Cargo, copies binaries into `build/bin/`, and calls `sentry-omega build --bins-dir build/bin --releases-dir releases` to write the omega manifest.
 
-4. **Logging:** Python-side loggers write to per-bot log files and a `Discovery/gateway_queue.log` dispatch file for Rust to forward. Operators can point these paths to ramdisk locations to limit exposure on compromised hosts. The root folder may collect copies for auditing; update README/AGENTS if you change paths.
+4. **Slash-command sync:** each Rust gateway exposes a `sync_slash_commands` stub during `flush()` to remind operators to register slash commands. Replace the stub with a real Discord HTTP client while keeping tokens in environment variables so Python never touches the network.
+
+5. **Logging:** Python-side loggers write to per-bot log files and a `Discovery/gateway_queue.log` dispatch file for Rust to forward. Operators can point these paths to ramdisk locations to limit exposure on compromised hosts. The root folder may collect copies for auditing; update README/AGENTS if you change paths.
 
 ## Security posture for hostile hosts
 - **Secrets:** all secrets stay in environment variables. Config files store only base64 `nonce`/`ciphertext`/`tag` triples from the vault. Never place real secrets in tracked files.
