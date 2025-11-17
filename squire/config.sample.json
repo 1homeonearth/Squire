@@ -1,0 +1,35 @@
+{
+  "vault": {
+    "key_env": "SQUIRE_VAULT_KEY",
+    "salt_env": "SQUIRE_VAULT_SALT",
+    "derived_from_passphrase": true
+  },
+  "secrets": [
+    {
+      "name": "discord_bot_token",
+      "nonce": "$ENV{DISCORD_TOKEN_NONCE}",
+      "ciphertext": "$ENV{DISCORD_TOKEN_CIPHERTEXT}",
+      "tag": "$ENV{DISCORD_TOKEN_TAG}"
+    }
+  ],
+  "password_hashes": [
+    "$ENV{ADMIN_PASSWORD_HASH}"
+  ],
+  "features": {
+    "autoban": {
+      "violation_threshold": 3
+    },
+    "experience": {
+      "persistence_path": "data/experience.json"
+    },
+    "embed_builder": {
+      "template_path": "data/embed_template.json"
+    },
+    "rust_gateway": {
+      "python_entrypoint": "python/main.py",
+      "socket_path": "run/discord-gateway.sock",
+      "log_dispatch_path": "Discovery/gateway_queue.log",
+      "presence_file": "Discovery/ecosystem_presence.txt"
+    }
+  }
+}

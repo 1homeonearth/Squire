@@ -1,0 +1,33 @@
+{
+  "vault": {
+    "key_env": "BARD_VAULT_KEY",
+    "salt_env": "BARD_VAULT_SALT",
+    "derived_from_passphrase": true
+  },
+  "secrets": [
+    {
+      "name": "logging_bot_token",
+      "nonce": "$ENV{BARD_TOKEN_NONCE}",
+      "ciphertext": "$ENV{BARD_TOKEN_CIPHERTEXT}",
+      "tag": "$ENV{BARD_TOKEN_TAG}"
+    }
+  ],
+  "features": {
+    "logging_forwarder": {
+      "default_logging_channel": "$ENV{BARD_LOG_CHANNEL}"
+    },
+    "welcome_card": {
+      "template_path": "data/welcome_template.txt"
+    },
+    "starboard": {
+      "threshold": 3
+    },
+    "moderation_logging": {
+      "audit_channel": "$ENV{BARD_MODLOG_CHANNEL}"
+    },
+    "rust_gateway": {
+      "presence_file": "Discovery/ecosystem_presence.txt",
+      "log_dispatch_path": "Discovery/gateway_queue.log"
+    }
+  }
+}
