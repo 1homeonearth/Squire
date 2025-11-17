@@ -47,10 +47,10 @@ It writes `Discovery/gateway_queue.log` with a friendly marker so students can s
 - The console with timestamps.
 - A per-bot log file (optional path argument).
 - A central dispatch file (`Discovery/gateway_queue.log`) so the Rust gateway can forward logs to a secure Discord logging channel without Python opening sockets.
-All defaults are anchored to this bot’s directory so logs do not leak elsewhere; point the environment variables to a ramdisk if you prefer ephemeral storage on a compromised host.
+All defaults are anchored to this bot’s directory so logs do not leak elsewhere; point the environment variables to a ramdisk if you prefer ephemeral storage on a compromised host. The Rust gateway adds a redacted HTTPS summary to `Discovery/secure_transport.log` so sensitive payloads stay out of stdout.
 
 ## Inter-bot awareness
-Squire waits for the ecosystem hub to drop `Discovery/ecosystem_presence.txt` before exchanging bot-to-bot messages. Until then, only Discord-bound payloads are prepared for the Rust gateway.
+Squire waits for the ecosystem hub to drop a signed `Discovery/ecosystem_presence.txt` before exchanging bot-to-bot messages. The signature is a SipHash digest derived from the `ECOSYSTEM_PRESENCE_KEY` environment variable, so local processes cannot forge presence without the shared key. Until the signature validates, only Discord-bound payloads are prepared for the Rust gateway.
 
 ## Learning path
 - Start with `python/crypto/passwords.py` and `python/crypto/secrets.py` to see scrypt hashing and ChaCha20-Poly1305.

@@ -57,12 +57,12 @@ Every folder with code has an `AGENTS.md` for behavior rules and a `TODO.md` for
 
 4. **Slash-command sync:** each Rust gateway exposes a `sync_slash_commands` stub during `flush()` to remind operators to register slash commands. Replace the stub with a real Discord HTTP client while keeping tokens in environment variables so Python never touches the network.
 
-5. **Logging:** Python-side loggers write to per-bot log files and a `Discovery/gateway_queue.log` dispatch file for Rust to forward. Operators can point these paths to ramdisk locations to limit exposure on compromised hosts. The root folder may collect copies for auditing; update README/AGENTS if you change paths.
+5. **Logging:** Python-side loggers write to per-bot log files and a `Discovery/gateway_queue.log` dispatch file for Rust to forward. Operators can point these paths to ramdisk locations to limit exposure on compromised hosts. The Rust gateways also record a redacted HTTPS summary in `Discovery/secure_transport.log` instead of printing payloads to stdout. The root folder may collect copies for auditing; update README/AGENTS if you change paths.
 
 ## Security posture for hostile hosts
 - **Secrets:** all secrets stay in environment variables. Config files store only base64 `nonce`/`ciphertext`/`tag` triples from the vault. Never place real secrets in tracked files.
 - **Vault necessity:** the vault keeps Discord tokens encrypted with HKDF + ChaCha20-Poly1305 so tampering is detected before any plaintext is released.
-- **Inter-bot comms:** the Rust hub writes `ecosystem_presence.txt` inside each `Discovery/` directory. Bots and nested ecosystems remain inert until that marker appears, keeping Python offline-only.
+- **Inter-bot comms:** the Rust hub writes `ecosystem_presence.txt` inside each `Discovery/` directory and signs it with a SipHash digest derived from the `ECOSYSTEM_PRESENCE_KEY` environment variable. Bots and nested ecosystems remain inert until that signed marker appears, keeping Python offline-only and blocking forged presence files.
 - **Hardening ideas:** keep vault keys in env vars or hardware-backed stores, zeroize buffers after use, run Rust gateways with least privilege, and use tmpfs for logs and queues.
 
 ## Recursive modular model

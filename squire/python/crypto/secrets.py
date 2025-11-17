@@ -207,7 +207,9 @@ def _clamp_r(r: int) -> int:
     return r & 0x0FFFFFFC0FFFFFFC0FFFFFFC0FFFFFFF
 
 
-def _poly1305_mac(msg: bytes, one_time_key: bytes) -> bytes:
+def _poly1305_mac(
+    msg: bytes, one_time_key: bytes, hibit_last_block: bool = True
+) -> bytes:
     """
     Compute a Poly1305 authenticator over ``msg`` using the provided key.
 
@@ -228,7 +230,9 @@ def _poly1305_mac(msg: bytes, one_time_key: bytes) -> bytes:
     # Process 16-byte blocks with an extra 1 bit appended (the hibit).
     for offset in range(0, len(msg), 16):
         block = msg[offset : offset + 16]
-        n = int.from_bytes(block + b"\x01", "little")
+        skip_hibit = (not hibit_last_block) and (offset + 16 == len(msg))
+        hibit = b"" if skip_hibit else b"\x01"
+        n = int.from_bytes(block + hibit, "little")
         accumulator = (accumulator + n) % p
         accumulator = (accumulator * r) % p
 
@@ -249,10 +253,35 @@ def _poly1305_aead_tag(aad: bytes, ciphertext: bytes, otk: bytes) -> bytes:
             return b""
         return b"\x00" * (16 - (len(data) % 16))
 
-    mac_data = aad + _pad16(aad) + ciphertext + _pad16(ciphertext)
-    mac_data += struct.pack("<Q", len(aad))
-    mac_data += struct.pack("<Q", len(ciphertext))
-    return _poly1305_mac(mac_data, otk)
+    r = _clamp_r(int.from_bytes(otk[:16], "little"))
+    p = (1 << 130) - 5
+
+    def _process(acc: int, chunk: bytes, hibit: bool) -> int:
+        padded = chunk + (b"\x01" if hibit else b"")
+        n = int.from_bytes(padded, "little")
+        return (acc + n) * r % p
+
+    accumulator = 0
+    for offset in range(0, len(aad), 16):
+        block = aad[offset : offset + 16]
+        accumulator = _process(accumulator, block, True)
+
+    if aad:
+        accumulator = _process(accumulator, _pad16(aad), True)
+
+    for offset in range(0, len(ciphertext), 16):
+        block = ciphertext[offset : offset + 16]
+        accumulator = _process(accumulator, block, True)
+
+    if ciphertext:
+        accumulator = _process(accumulator, _pad16(ciphertext), True)
+
+    length_block = struct.pack("<Q", len(aad)) + struct.pack("<Q", len(ciphertext))
+    accumulator = _process(accumulator, length_block, False)
+
+    s = int.from_bytes(otk[16:], "little")
+    accumulator = (accumulator + s) % (1 << 128)
+    return accumulator.to_bytes(16, "little")
 
 
 # -- Public API --------------------------------------------------------------

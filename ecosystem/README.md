@@ -4,7 +4,7 @@ This folder holds the Rust core that coordinates bots. It keeps all Discord and 
 
 ## What the hub does
 - Discovers entities by looking at sibling folders in the repo root and any entries inside `Discovery/` folders. An entity is any directory that contains its own `Discovery/` folder.
-- Writes `Discovery/ecosystem_presence.txt` into each discovered entity to signal “safe to talk.”
+- Writes `Discovery/ecosystem_presence.txt` into each discovered entity to signal “safe to talk” and signs it with a SipHash digest based on `ECOSYSTEM_PRESENCE_KEY`. Gateways ignore unsigned markers so local processes cannot short-circuit the isolation barrier.
 - Reads `Discovery/gateway_queue.log` inside each entity to collect messages that Rust would forward to Discord.
 
 ## Running
