@@ -15,3 +15,10 @@ rustc rust/central_comm.rs -o target/central_comm
 ./target/central_comm
 ```
 Run from this folder so the hub can find sibling bots; adjust the working directory if you run a nested ecosystem.
+
+## Cargo workspace target
+The `ecosystem-hub` Cargo target mirrors the handwritten gateway so offline builds have a binary to stage:
+```bash
+cargo build --offline --release -p ecosystem-hub
+```
+The placeholder writes `Discovery/ecosystem_presence.txt` during the build so students can see where presence markers live. Replace it with the full coordinator logic when you wire real Discord flows.

@@ -25,11 +25,17 @@ Every function used by Squire sits inside this folder with no outside dependenci
 2. Compile the Rust helpers:
    ```bash
    cd squire
-   rustc rust/discord_gateway.rs -o target/discord_gateway
-   rustc rust/setup_panel.rs -o target/setup_panel
-   cd -
-   ```
+ rustc rust/discord_gateway.rs -o target/discord_gateway
+  rustc rust/setup_panel.rs -o target/setup_panel
+  cd -
+  ```
 3. Slash commands: the gateway’s `sync_slash_commands` runs during `flush()` to keep commands current. Swap the stub with a real Discord client while keeping tokens in environment variables.
+
+The Cargo workspace also exposes a placeholder binary named `squire-gateway` so offline builds have a target to stage:
+```bash
+cargo build --offline --release -p squire-gateway
+```
+It writes `Discovery/gateway_queue.log` with a friendly marker so students can see where the Rust gateway will read messages.
 
 ## Secrets and vault
 - Keep vault keys and salts only in environment variables (e.g., `SQUIRE_VAULT_KEY`, `SQUIRE_VAULT_SALT`).
