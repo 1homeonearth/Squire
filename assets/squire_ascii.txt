@@ -1,8 +1,0 @@
-  _____                 _              
- / ____|               (_)             
-| (___   ___ _ ____   ___  ___  _ __   
- \___ \ / _ \ '__\ \ / / |/ _ \| '_ \  
- ____) |  __/ |   \ V /| | (_) | | | | 
-|_____/ \___|_|    \_/ |_|\___/|_| |_|
-
-Squire emblem rendered as ASCII so auditors can read it directly in version control.
