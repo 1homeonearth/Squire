@@ -1,4 +1,22 @@
 {
+  "vault": {
+    "key_env": "SQUIRE_VAULT_KEY",
+    "key_path": "$ENV{SQUIRE_VAULT_KEY_PATH}",
+    "passphrase_env": "$ENV{SQUIRE_VAULT_PASSPHRASE_ENV}",
+    "salt_b64": "$ENV{SQUIRE_VAULT_SALT_B64}"
+  },
+  "encryptedSecrets": {
+    "token": {
+      "nonce": "$ENV{DISCORD_TOKEN_NONCE_B64}",
+      "ciphertext": "$ENV{DISCORD_TOKEN_CIPHERTEXT_B64}",
+      "tag": "$ENV{DISCORD_TOKEN_TAG_B64}"
+    },
+    "applicationId": {
+      "nonce": "$ENV{APPLICATION_ID_NONCE_B64}",
+      "ciphertext": "$ENV{APPLICATION_ID_CIPHERTEXT_B64}",
+      "tag": "$ENV{APPLICATION_ID_TAG_B64}"
+    }
+  },
   "token": "$ENV{DISCORD_TOKEN}",
   "applicationId": "$ENV{APPLICATION_ID}",
   "devGuildId": null,
