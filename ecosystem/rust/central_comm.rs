@@ -10,7 +10,9 @@ use std::collections::VecDeque;
 use std::env; // Standard-library access to the current working directory for clarity.
 use std::fs::{self, File};
 use std::io::{Read, Write};
+use std::hash::{Hasher, SipHasher};
 use std::path::{Path, PathBuf};
+use std::time::{SystemTime, UNIX_EPOCH};
 
 /// Name of the presence file the hub writes inside each entity’s `Discovery/` directory.
 const PRESENCE_FILE: &str = "ecosystem_presence.txt";
@@ -18,6 +20,70 @@ const PRESENCE_FILE: &str = "ecosystem_presence.txt";
 const BOT_QUEUE_FILE: &str = "gateway_queue.log";
 /// Name of the hub log stored inside the ecosystem’s own `Discovery/` folder.
 const HUB_QUEUE_FILE: &str = "hub_queue.log";
+/// Environment variable that carries the keyed material used to sign presence files.
+const PRESENCE_KEY_ENV: &str = "ECOSYSTEM_PRESENCE_KEY";
+
+/// Parse a hex-encoded 16-byte key used for SipHash-based presence signatures.
+fn parse_presence_key(raw: &str) -> Option<[u8; 16]> {
+    if raw.len() != 32 {
+        return None;
+    }
+
+    let mut bytes = [0u8; 16];
+    for (i, chunk) in raw.as_bytes().chunks(2).enumerate() {
+        let text = std::str::from_utf8(chunk).ok()?;
+        bytes[i] = u8::from_str_radix(text, 16).ok()?;
+    }
+    Some(bytes)
+}
+
+/// Convert a 16-byte key into SipHash seeds and sign the provided nonce.
+fn sign_presence(key_bytes: &[u8; 16], nonce: &str) -> String {
+    let mut k0 = 0u64;
+    let mut k1 = 0u64;
+    for (i, b) in key_bytes.iter().enumerate() {
+        if i < 8 {
+            k0 = (k0 << 8) | (*b as u64);
+        } else {
+            k1 = (k1 << 8) | (*b as u64);
+        }
+    }
+
+    let mut hasher = SipHasher::new_with_keys(k0, k1);
+    hasher.write(nonce.as_bytes());
+    format!("{:016x}", hasher.finish())
+}
+
+/// Load the presence signing key from the environment.
+fn load_presence_key() -> Option<[u8; 16]> {
+    env::var(PRESENCE_KEY_ENV)
+        .ok()
+        .and_then(|raw| parse_presence_key(raw.trim()))
+}
+
+/// Build a presence marker that includes a timestamped nonce and keyed signature.
+fn presence_payload(key: Option<[u8; 16]>, entity: &Path) -> String {
+    let timestamp = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|d| d.as_millis())
+        .unwrap_or(0);
+    let nonce = format!("{}|{}", entity.display(), timestamp);
+
+    match key {
+        Some(k) => {
+            let signature = sign_presence(&k, &nonce);
+            format!("nonce={}\nsignature={}", nonce, signature)
+        }
+        None => {
+            // Keep the marker explicit about the missing key so operators know why
+            // a gateway refuses to accept it.
+            format!(
+                "nonce={}\nsignature=missing-{}",
+                nonce, PRESENCE_KEY_ENV
+            )
+        }
+    }
+}
 
 /// Determine whether a path represents a bot or ecosystem by checking for a `Discovery/` directory.
 fn is_entity(path: &Path) -> bool {
@@ -51,13 +117,25 @@ fn collect_entities(containers: Vec<PathBuf>) -> Vec<PathBuf> {
 
 /// Drop the presence file into each entity’s Discovery folder so the bot or ecosystem knows the hub is live.
 pub fn announce_presence(root: &Path, entities: &[PathBuf]) {
+    let presence_key = load_presence_key();
+    if presence_key.is_none() {
+        append_hub_log(
+            root,
+            &format!(
+                "{} is unset; presence files will be unsigned and gateways will ignore them.",
+                PRESENCE_KEY_ENV
+            ),
+        );
+    }
+
     for entity in entities {
         let marker = entity.join("Discovery").join(PRESENCE_FILE);
         if let Some(parent) = marker.parent() {
             let _ = fs::create_dir_all(parent);
         }
         if let Ok(mut file) = File::create(&marker) {
-            let _ = file.write_all(b"ecosystem is ready; bots may talk via Rust");
+            let payload = presence_payload(presence_key, entity);
+            let _ = file.write_all(payload.as_bytes());
         }
     }
 
