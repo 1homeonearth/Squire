@@ -1,9 +1,9 @@
 [workspace]
 members = [
     "ecosystem",
-    "sentry",
-    "squire",
-    "bard"
+    "ecosystem/Discovery/sentry",
+    "ecosystem/Discovery/squire",
+    "ecosystem/Discovery/bard"
 ]
 resolver = "2"
 

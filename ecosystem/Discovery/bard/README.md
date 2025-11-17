@@ -11,19 +11,20 @@
 
 # Bard bot — logging-focused reference
 
-Bard now carries beginner-ready modules for logging-forwarder duties, welcome cards, starboard highlights, and moderation logging. Bots start at the repo root; move Bard into another entity’s `Discovery/` folder when you want a hub to coordinate it. Comments stay verbose so a new reader can follow every step.
+Bard now carries beginner-ready modules for logging-forwarder duties, welcome cards, starboard highlights, and moderation logging. Bard lives inside the ecosystem hub’s `Discovery/` directory so the coordinator can enroll it immediately; you can move the folder into another entity’s `Discovery/` directory when you want a different hub to coordinate it. Comments stay verbose so a new reader can follow every step.
 
 All helpers used by Bard live in this folder and rely only on the standard libraries, so anyone can audit the code without pulling in outside imports.
 
 ## Running Bard
 1. Set the Python path so imports resolve within this folder:
    ```bash
-   export PYTHONPATH="$(pwd)/bard/python"
-   python bard/python/main.py
+   cd ecosystem/Discovery/bard
+   export PYTHONPATH="$(pwd)/python"
+   python python/main.py
    ```
 2. Compile the Rust helpers:
    ```bash
-   cd bard
+   cd ecosystem/Discovery/bard
    rustc rust/discord_gateway.rs -o target/discord_gateway
    rustc rust/setup_panel.rs -o target/setup_panel
    cd -

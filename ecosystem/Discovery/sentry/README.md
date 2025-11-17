@@ -11,7 +11,7 @@
 
 # Sentry bot — safety-focused stub
 
-This folder now contains Sentry Omega, the Rust crate responsible for reproducible builds and verification across the ecosystem. Bots start at the repo root; move Sentry into another entity’s `Discovery/` folder when you want a hub to coordinate it. Keep explanations beginner-friendly.
+This folder now contains Sentry Omega, the Rust crate responsible for reproducible builds and verification across the ecosystem. Sentry now lives inside the ecosystem hub’s `Discovery/` directory so the coordinator enrolls it immediately; you can move the folder into another entity’s `Discovery/` directory when you want a different hub to coordinate it. Keep explanations beginner-friendly.
 
 All scaffolding here uses only standard-library capabilities so beginners can follow every line without external imports. The legacy Python and Rust stubs remain for reference, but the Cargo targets focus on Sentry Omega’s build and verification duties.
 
